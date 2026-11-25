@@ -55,8 +55,9 @@ describe('SubscriptionProbePolicy in SubscriptionConfigDrawer (US-R3)', () => {
         h(SubscriptionConfigDrawer, {
           modelValue: true,
           subscription,
-          onSave: (draft: SubscriptionDraft) => {
+          onSave: (draft: SubscriptionDraft, settled: (error?: string) => void) => {
             lastSavedDraft = draft
+            settled()
           },
         }),
     })

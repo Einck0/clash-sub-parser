@@ -8,6 +8,7 @@ import {
   getBoolDisplayState,
   isFieldConfigured,
   countGroupConfigured,
+  matchesDnsField,
 } from './dnsFields'
 
 describe('dnsFields configuration and helpers', () => {
@@ -33,6 +34,14 @@ describe('dnsFields configuration and helpers', () => {
     expect(ALL_KNOWN_KEYS).toContain('use-hosts')
     expect(ALL_KNOWN_KEYS).toContain('use-system-hosts')
     expect(ALL_KNOWN_KEYS.length).toBe(20)
+  })
+
+  it('finds fields by user-facing label, key, and description', () => {
+    expect(matchesDnsField(DNS_COMMON_FIELDS[0], 'nameserver')).toBe(true)
+    expect(matchesDnsField(DNS_COMMON_FIELDS[0], 'Primary')).toBe(true)
+    expect(matchesDnsField(DNS_COMMON_FIELDS[0], 'DoH')).toBe(true)
+    expect(matchesDnsField(DNS_COMMON_FIELDS[0], 'unrelated')).toBe(false)
+    expect(matchesDnsField(DNS_COMMON_FIELDS[0], '   ')).toBe(true)
   })
 
   it('correctly partitions common fields and 3 advanced groups without nesting basic essentials', () => {

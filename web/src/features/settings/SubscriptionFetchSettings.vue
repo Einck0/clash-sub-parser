@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ArrowDownTrayIcon, ArrowPathIcon } from '@heroicons/vue/24/outline'
 import { api } from '../../api/client'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
 import { displayText } from '../../utils/displayNames'
 import { toastStore } from '../../ui/toast'
+import { useServerSettings } from './useServerSettings'
 
 type Mode = 'environment' | 'direct' | 'proxy'
 
@@ -23,16 +24,25 @@ const settings = ref<FetchSettings | null>(null)
 const mode = ref<Mode>('environment')
 const proxyURL = ref('')
 const clearProxy = ref(false)
-const loading = ref(true)
-const saving = ref(false)
-const error = ref('')
+const state = useServerSettings<FetchSettings>({
+  read: () => api.get<FetchSettings>('/api/v1/settings/subscription-fetch'),
+  apply,
+  snapshot: () => ({ mode: mode.value, hasReplacement: proxyURL.value.length > 0, clear: clearProxy.value }),
+})
+const { loaded, loading, saving, error, readFailed } = state
+const busy = computed(() => loading.value || saving.value)
+const load = state.load
 
 function apply(value: FetchSettings) {
   if (
     !value ||
     !['environment', 'direct', 'proxy'].includes(value.mode) ||
     !['direct', 'proxy'].includes(value.effective_mode) ||
-    typeof value.credentials_present !== 'boolean'
+    typeof value.credentials_present !== 'boolean' ||
+    typeof value.effective_credentials_present !== 'boolean' ||
+    typeof value.effective_source !== 'string' ||
+    typeof value.configured_proxy_endpoint !== 'string' ||
+    typeof value.effective_proxy_endpoint !== 'string'
   ) {
     throw new Error(t('settings.fetchInvalidResponse'))
   }
@@ -42,22 +52,8 @@ function apply(value: FetchSettings) {
   clearProxy.value = false
 }
 
-async function load() {
-  loading.value = true
-  error.value = ''
-  try {
-    apply(await api.get<FetchSettings>('/api/v1/settings/subscription-fetch'))
-  } catch (err: any) {
-    error.value = displayText(err?.message || t('settings.fetchLoadFailed'))
-  } finally {
-    loading.value = false
-  }
-}
-
 async function save(reset = false) {
-  if (!settings.value || saving.value) return
-  saving.value = true
-  error.value = ''
+  if (!settings.value || busy.value) return
   const payload: { mode: Mode; proxy_url?: string; clear_proxy_url?: boolean } = {
     mode: reset ? 'environment' : mode.value,
   }
@@ -65,17 +61,12 @@ async function save(reset = false) {
     if (clearProxy.value) payload.clear_proxy_url = true
     else if (proxyURL.value.trim()) payload.proxy_url = proxyURL.value.trim()
   }
-  try {
-    apply(await api.put<FetchSettings>('/api/v1/settings/subscription-fetch', payload))
+  if (await state.save(() => api.put<FetchSettings>('/api/v1/settings/subscription-fetch', payload))) {
     toastStore.push({ message: t('settings.fetchSaved'), tone: 'success' })
-  } catch (err: any) {
-    error.value = displayText(err?.message || t('settings.fetchSaveFailed'))
-  } finally {
-    saving.value = false
   }
 }
 
-onMounted(load)
+onMounted(() => { void load() })
 </script>
 
 <template>
@@ -99,23 +90,23 @@ onMounted(load)
         <span>{{ t('common.loading') }}</span>
       </p>
 
-      <div v-if="error" role="alert" class="alert alert-error text-xs flex items-center justify-between break-words" data-testid="fetch-settings-error">
-        <span>{{ displayText(error) }}</span>
-        <button type="button" class="btn btn-xs btn-ghost gap-1" @click="load">
+      <div v-if="error" role="alert" class="alert alert-error text-xs flex flex-wrap items-center justify-between gap-2" data-testid="fetch-settings-error">
+        <span class="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ displayText(error) }}</span>
+        <button type="button" class="btn btn-xs btn-ghost gap-1" :disabled="busy" @click="load">
           <ArrowPathIcon class="w-3.5 h-3.5" />
           <span>{{ t('common.refresh') }}</span>
         </button>
       </div>
 
-      <button v-if="!loading && !settings" class="btn btn-sm btn-outline gap-1.5" @click="load">
+      <button v-if="!loading && !settings && !error" class="btn btn-sm btn-outline gap-1.5" @click="load">
         <ArrowPathIcon class="w-4 h-4" />
         <span>{{ t('common.refresh') }}</span>
       </button>
 
-      <template v-if="settings">
+      <fieldset v-if="loaded && settings" :disabled="busy || readFailed" class="space-y-4 min-w-0">
         <div class="space-y-1.5 w-full">
-          <label class="text-xs font-semibold text-base-content/80 block">{{ t('settings.fetchMode') }}</label>
-          <select v-model="mode" class="select select-sm sm:select-md w-full bg-base-100/80" :disabled="saving" data-testid="fetch-mode">
+          <label for="fetch-mode" class="text-xs font-semibold text-base-content/80 block">{{ t('settings.fetchMode') }}</label>
+          <select id="fetch-mode" v-model="mode" class="select select-sm sm:select-md w-full bg-base-100/80" :disabled="saving" data-testid="fetch-mode">
             <option value="environment">{{ t('settings.fetchEnvironment') }}</option>
             <option value="direct">{{ t('settings.fetchDirect') }}</option>
             <option value="proxy">{{ t('settings.fetchProxy') }}</option>
@@ -142,8 +133,9 @@ onMounted(load)
         </div>
 
         <div class="space-y-1.5 w-full">
-          <label class="text-xs font-semibold text-base-content/80 block">{{ t('settings.fetchReplacement') }}</label>
+          <label for="fetch-proxy-url" class="text-xs font-semibold text-base-content/80 block">{{ t('settings.fetchReplacement') }}</label>
           <input
+            id="fetch-proxy-url"
             v-model="proxyURL"
             type="password"
             autocomplete="new-password"
@@ -188,7 +180,7 @@ onMounted(load)
         </div>
 
         <p class="text-[11px] text-base-content/60 leading-relaxed">{{ t('settings.fetchScope') }}</p>
-      </template>
+      </fieldset>
     </div>
   </section>
 </template>

@@ -1,3 +1,21 @@
+function readStoredToken(storage: 'localStorage' | 'sessionStorage', key: string): string | null {
+  try {
+    return typeof window === 'undefined' ? null : window[storage].getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeStoredToken(storage: 'localStorage' | 'sessionStorage', key: string, token: string | null): void {
+  try {
+    if (typeof window === 'undefined') return
+    if (token) window[storage].setItem(key, token)
+    else window[storage].removeItem(key)
+  } catch {
+    // Restricted storage must not prevent an in-memory session.
+  }
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
@@ -36,6 +54,7 @@ export class ApiClient {
   private authToken: string | null | undefined = undefined
   private csrfToken: string | null | undefined = undefined
   private onUnauthorizedCallback?: () => void
+  private authEpoch = 0
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = options.baseUrl ? options.baseUrl.replace(/\/+$/, '') : ''
@@ -55,22 +74,17 @@ export class ApiClient {
     this.onUnauthorizedCallback = cb
   }
 
+  /** Ignore session invalidation from requests belonging to an older auth operation. */
+  invalidateAuthRequests(): void {
+    this.authEpoch++
+  }
+
   /**
    * Updates in-memory CSRF token and synchronizes with sessionStorage if available.
    */
   setCsrfToken(token: string | null): void {
     this.csrfToken = token
-    if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
-      try {
-        if (token) {
-          window.sessionStorage.setItem('csp_csrf_token', token)
-        } else {
-          window.sessionStorage.removeItem('csp_csrf_token')
-        }
-      } catch {
-        // ignore sessionStorage access errors
-      }
-    }
+    writeStoredToken('sessionStorage', 'csp_csrf_token', token)
   }
 
   /**
@@ -81,22 +95,22 @@ export class ApiClient {
       return this.csrfToken
     }
     if (this.getCsrfTokenFn) {
-      const fromFn = this.getCsrfTokenFn()
-      if (fromFn) return fromFn
-    }
-    if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
       try {
-        const stored = window.sessionStorage.getItem('csp_csrf_token')
-        if (stored) return stored
+        const fromFn = this.getCsrfTokenFn()
+        if (fromFn) return fromFn
       } catch {
-        // ignore
+        // A host-provided storage getter can be restricted too.
       }
     }
-    if (typeof document !== 'undefined') {
-      const match = document.cookie.match(/(?:^|;\s*)(?:csrf_token|csp_csrf|XSRF-TOKEN)=([^;]+)/)
-      if (match) {
-        return decodeURIComponent(match[1])
+    const stored = readStoredToken('sessionStorage', 'csp_csrf_token')
+    if (stored) return stored
+    try {
+      if (typeof document !== 'undefined') {
+        const match = document.cookie.match(/(?:^|;\s*)(?:csrf_token|csp_csrf|XSRF-TOKEN)=([^;]+)/)
+        if (match) return decodeURIComponent(match[1])
       }
+    } catch {
+      // Restricted cookies or malformed encoding do not supply a CSRF token.
     }
     return null
   }
@@ -105,18 +119,9 @@ export class ApiClient {
    * Updates in-memory authentication token and synchronizes with localStorage if available.
    */
   setAuthToken(token: string | null): void {
+    this.invalidateAuthRequests()
     this.authToken = token
-    if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
-      try {
-        if (token) {
-          window.localStorage.setItem('csp_token', token)
-        } else {
-          window.localStorage.removeItem('csp_token')
-        }
-      } catch {
-        // ignore localStorage access errors
-      }
-    }
+    writeStoredToken('localStorage', 'csp_token', token)
   }
 
   /**
@@ -126,7 +131,11 @@ export class ApiClient {
     if (this.authToken !== undefined) {
       return this.authToken
     }
-    return this.getAuthTokenFn?.() ?? null
+    try {
+      return this.getAuthTokenFn?.() ?? null
+    } catch {
+      return null
+    }
   }
 
   async request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -154,11 +163,9 @@ export class ApiClient {
       headers.set('Accept', 'application/json')
     }
 
-    if (!headers.has('Authorization')) {
-      const token = this.getAuthToken()
-      if (token) {
-        headers.set('Authorization', `Bearer ${token}`)
-      }
+    const requestAuthToken = this.getAuthToken()
+    if (!headers.has('Authorization') && requestAuthToken) {
+      headers.set('Authorization', `Bearer ${requestAuthToken}`)
     }
 
     const method = (init.method || 'GET').toUpperCase()
@@ -177,6 +184,7 @@ export class ApiClient {
       init.body = JSON.stringify(init.body)
     }
 
+    const authEpoch = this.authEpoch
     const res = await this.fetcher(url, {
       ...init,
       headers,
@@ -185,7 +193,7 @@ export class ApiClient {
     const effectiveRequestId = res.headers.get('X-Request-ID') ?? headers.get('X-Request-ID') ?? undefined
 
     if (!res.ok) {
-      if (res.status === 401) {
+      if (res.status === 401 && authEpoch === this.authEpoch && requestAuthToken === this.getAuthToken()) {
         try {
           this.onUnauthorizedCallback?.()
         } catch (err) {
@@ -272,18 +280,8 @@ export class ApiClient {
 
 export const api = new ApiClient({
   baseUrl: '',
-  getAuthToken: () => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('csp_token')
-    }
-    return null
-  },
-  getCsrfToken: () => {
-    if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
-      return sessionStorage.getItem('csp_csrf_token')
-    }
-    return null
-  },
+  getAuthToken: () => readStoredToken('localStorage', 'csp_token'),
+  getCsrfToken: () => readStoredToken('sessionStorage', 'csp_csrf_token'),
 })
 
 export const setAuthToken = (token: string | null): void => api.setAuthToken(token)

@@ -109,6 +109,13 @@ describe('ErrorStateCard UI Component', () => {
     expect(container.textContent).toContain('HTTP 422')
   })
 
+  it('does not classify a validation error mentioning a token as authentication failure', () => {
+    const { container } = mountComponent({ error: new ApiError(422, 'validation_failed', 'The provider token format is invalid') })
+    expect(container.textContent).toContain('HTTP 422')
+    expect(container.textContent).not.toContain('鉴权已失效或需要登录')
+    expect(container.textContent).not.toContain('前往设置 / 鉴权')
+  })
+
   it('parses error string with status code', async () => {
     const { container } = mountComponent({ error: 'Request failed with 401: unauthorized access' })
 

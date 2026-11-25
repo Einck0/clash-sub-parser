@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch, type VNodeRef } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch, type VNodeRef } from 'vue'
+import { matchedRouteKey, onBeforeRouteLeave, onBeforeRouteUpdate, routeLocationKey, routerKey } from 'vue-router'
 import {
   ExclamationTriangleIcon,
   EyeIcon,
@@ -46,6 +46,12 @@ const {
   measureNodeSpeed,
   probingNodeIds,
   queuedNodeIds,
+  probePendingIds,
+  probeStates,
+  pendingResultRefreshIds,
+  resultRefreshFailedIds,
+  poolError,
+  appendError,
   error,
   total,
   hasMore,
@@ -69,21 +75,12 @@ const {
   updateNodeConnection,
 } = useNodes()
 
-const route = (() => {
-  try {
-    return useRoute()
-  } catch {
-    return undefined
-  }
-})()
+const route = inject(routeLocationKey, undefined)
+const router = inject(routerKey, undefined)
 
-const router = (() => {
-  try {
-    return useRouter()
-  } catch {
-    return undefined
-  }
-})()
+function queryNodeId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
 
 // URL query normalization and safe fallbacks
 function parseQueryProtocol(queryProto: unknown): string {
@@ -167,7 +164,35 @@ function syncUrlFromState() {
 }
 
 const drawerOpen = ref(false)
+const nodeDrawer = ref<InstanceType<typeof NodeDetailDrawer> | null>(null)
+const routeRecord = inject(matchedRouteKey, null)
+if (routeRecord?.value) {
+  // Finish the in-flight save before allowing navigation; the drawer owns discard prompts.
+  onBeforeRouteLeave(() => !drawerOpen.value || !savingConnection.value)
+  onBeforeRouteUpdate((to, from) => {
+    const targetId = queryNodeId(to.query.node)
+    if (targetId === queryNodeId(from.query.node) || !drawerOpen.value || targetId === selectedNode.value?.logicalId) return true
+    return nodeDrawer.value?.confirmNavigation() ?? true
+  })
+}
+const probeFeedbackTarget = ref('')
+const speedFeedbackTarget = ref('')
 const probeFeedback = ref('')
+const selectedProbeFeedback = computed(() => {
+  const id = selectedNode.value?.logicalId
+  if (!id) return ''
+  if (probePendingIds.value.has(id)) return uiText('正在提交普通检测…', 'Submitting probe…')
+  const state = probeStates.value[id]
+  if (state === 'queued') return uiText('已排队等待普通检测，尚未完成。', 'Queued for probing; not completed yet.')
+  if (state === 'running') return uiText('普通检测仍在运行，完成后自动刷新。', 'Probe is still running. Results refresh when it ends.')
+  if (state === 'failed') return uiText('普通检测失败，请查看检测历史。', 'Probe failed. See probe history.')
+  if (state === 'cancelled') return uiText('普通检测已取消。', 'Probe cancelled.')
+  if (state === 'expired') return uiText('普通检测已超时。', 'Probe expired.')
+  if (state === 'succeeded') return pendingResultRefreshIds.value.has(id) || resultRefreshFailedIds.value.has(id)
+    ? uiText('普通检测已完成，但结果尚未刷新，请重试详情。', 'Probe completed, but results have not refreshed. Retry node details.')
+    : uiText('普通检测已完成；带宽需单独测速。', 'Probe completed; bandwidth requires a separate measurement.')
+  return probeFeedbackTarget.value === id ? probeFeedback.value : ''
+})
 const speedTarget = ref<NormalizedNode | null>(null)
 const speedFeedback = ref('')
 const speedFailedIds = ref<Set<string>>(new Set())
@@ -182,11 +207,12 @@ async function confirmSpeed() {
   if (!node || speedingNodeId.value) return
   speedTarget.value = null
   speedFailedIds.value = new Set([...speedFailedIds.value].filter((id) => id !== node.logicalId))
-  speedFeedback.value = `正在对「${node.displayName}」进行单次带宽测速…`
+  speedFeedbackTarget.value = node.logicalId
+  speedFeedback.value = uiText(`正在对「${node.displayName}」进行单次带宽测速…`, `Measuring bandwidth once for “${node.displayName}”…`)
   const result = await measureNodeSpeed(node.logicalId)
   if (speedMinKiBS.value !== '') await load()
   if (!result.ok) speedFailedIds.value = new Set([...speedFailedIds.value, node.logicalId])
-  speedFeedback.value = result.ok ? `「${node.displayName}」测速结果已保存并刷新。` : (result.error || '本次测速失败，请重试。')
+  speedFeedback.value = result.ok ? uiText(`「${node.displayName}」测速结果已保存并刷新。`, `Bandwidth result for “${node.displayName}” was saved and refreshed.`) : (result.error || uiText('本次测速失败，请重试。', 'Bandwidth measurement failed. Retry.'))
 }
 const sourceHistory = ref<NodeSourceHistoryData | null>(null)
 const loadingSourceHistory = ref(false)
@@ -234,8 +260,8 @@ const selectedScopeConfirmMessage = computed(() => {
   const visible = visibleSelectedCount.value
   const hidden = total - visible
   return uiText(
-    `当前已选 ${total} 个节点（其中当前可见 ${visible} 项，其他页面/筛选隐藏 ${hidden} 项）。确认对全部 ${total} 个节点发起测速？`,
-    `Currently selected ${total} nodes (${visible} visible, ${hidden} hidden). Probe all ${total} nodes?`
+    `当前已选 ${total} 个节点（其中当前可见 ${visible} 项，其他页面或筛选隐藏 ${hidden} 项）。确认对全部 ${total} 个节点发起普通检测？`,
+    `Selected ${total} nodes (${visible} visible, ${hidden} hidden by other pages or filters). Probe all ${total} nodes?`
   )
 })
 
@@ -300,7 +326,7 @@ watch(items, () => {
 function handleProbeSelectedClick() {
   if (selectedIds.value.size === 0) {
     toastStore.push({
-      message: t('nodes.noNodeSelected') || '请先勾选需要检测的节点',
+      message: t('nodes.noNodeSelected') || uiText('请先勾选需要检测的节点', 'Select nodes to probe first'),
       tone: 'warning',
     })
     return
@@ -320,13 +346,13 @@ async function executeProbeSelected() {
   if (res.ok) {
     toastStore.push({
       message: uiText(
-        `已对所选 ${ids.length} 个节点发起测速`,
-        `Started probe for ${ids.length} selected nodes`
+        `已对所选 ${ids.length} 个节点提交普通检测`,
+        `Submitted probes for ${ids.length} selected nodes`
       ),
       tone: 'success',
     })
   } else {
-    toastStore.push({ message: res.error || '发起测速失败', tone: 'error' })
+    toastStore.push({ message: res.error || uiText('提交普通检测失败', 'Could not submit probes.'), tone: 'error' })
   }
 }
 
@@ -339,22 +365,16 @@ async function confirmExecuteProbeAll() {
   const res = await probeNodesBatch([])
   if (res.ok) {
     toastStore.push({
-      message: t('nodes.probingStarted') || '已发起全量节点测速任务',
+      message: uiText('已提交全部启用订阅节点的普通检测，不包含带宽测速。', 'Submitted probes for all enabled-subscription nodes. Bandwidth is not measured.'),
       tone: 'success',
     })
   } else {
-    toastStore.push({ message: res.error || '全量测速失败', tone: 'error' })
+    toastStore.push({ message: res.error || uiText('全量检测提交失败', 'Could not submit fleet probes.'), tone: 'error' })
   }
 }
 
-const effectiveProbingIds = computed(() => {
-  const set = new Set<string>(probingNodeIds.value)
-  if (probingNodeId.value) set.add(probingNodeId.value)
-  return set
-})
-
 function getNodeProbeState(node: NormalizedNode): 'probing' | 'queued' | 'idle' {
-  return resolveNodeProbeState(node, effectiveProbingIds.value, queuedNodeIds.value)
+  return resolveNodeProbeState(node, probingNodeIds.value, queuedNodeIds.value)
 }
 
 const healthCounts = computed(() => {
@@ -428,43 +448,58 @@ const activeFilterSummary = computed(() => {
 })
 
 async function handleProbeSelectedNode(node: NormalizedNode) {
-  probeFeedback.value = `已将节点「${node.displayName}」插队至节点池最前面优先检测...`
+  probeFeedbackTarget.value = node.logicalId
+  probeFeedback.value = uiText(`正在为「${node.displayName}」提交普通检测…`, `Submitting a probe for “${node.displayName}”…`)
   const res = await probeSingleNode(node.logicalId)
-  if (res.ok) {
-    probeFeedback.value = '已插队至节点池最前面优先检测 · 测速已完成并刷新最新状态'
+  if (selectedNode.value?.logicalId !== node.logicalId) return
+  if (!res.ok) {
+    probeFeedback.value = res.error || uiText('普通检测提交失败', 'Probe submission failed.')
+  } else if (res.state === 'queued') {
+    probeFeedback.value = uiText('已排队等待检测，不代表检测已完成。', 'Queued for probing; this does not mean the probe has completed.')
+  } else if (res.state === 'running') {
+    probeFeedback.value = uiText('普通检测仍在运行，结果完成后会自动刷新。', 'The probe is still running. Results will refresh when it finishes.')
+  } else if (res.state === 'succeeded') {
+    probeFeedback.value = res.refreshed
+      ? uiText('普通检测已完成并刷新结果；带宽需单独测速。', 'Probe completed and results refreshed; bandwidth requires a separate measurement.')
+      : uiText('普通检测已完成，但结果刷新失败，请重试详情。', 'Probe completed, but result refresh failed. Retry node details.')
   } else {
-    probeFeedback.value = res.error || '测速请求失败'
+    probeFeedback.value = uiText('检测状态尚未确认，请查看检测历史。', 'Probe completion is not confirmed. Check probe history.')
   }
 }
 
+let sourceHistorySeq = 0
+
 async function fetchSourceHistory(logicalId: string) {
+  const seq = ++sourceHistorySeq
   currentHistoryTargetId.value = logicalId
   sourceHistory.value = null
   sourceHistoryError.value = ''
   loadingSourceHistory.value = true
   try {
     const data = await fetchNodeSourceHistory(logicalId)
-    if (currentHistoryTargetId.value === logicalId) {
+    if (!data) throw new Error(uiText('来源历史响应无效，请重试。', 'Invalid source history response. Retry.'))
+    if (seq === sourceHistorySeq && currentHistoryTargetId.value === logicalId) {
       sourceHistory.value = data
     }
   } catch (err: any) {
-    if (currentHistoryTargetId.value === logicalId) {
+    if (seq === sourceHistorySeq && currentHistoryTargetId.value === logicalId) {
       if (err?.status === 404 || (err instanceof ApiError && err.status === 404)) {
-        sourceHistoryError.value = '未找到该节点的来源历史记录 (404)'
+        sourceHistoryError.value = uiText('未找到该节点的来源历史记录 (404)', 'Source history for this node was not found (404)')
       } else if (err?.status === 401 || (err instanceof ApiError && err.status === 401)) {
-        sourceHistoryError.value = '鉴权失败，无法获取来源历史'
+        sourceHistoryError.value = uiText('鉴权失败，无法获取来源历史', 'Authentication failed. Source history could not be loaded.')
       } else {
-        sourceHistoryError.value = displayText(err instanceof Error ? err.message : '获取来源历史失败')
+        sourceHistoryError.value = displayText(err instanceof Error ? err.message : uiText('获取来源历史失败', 'Failed to load source history'))
       }
     }
   } finally {
-    if (currentHistoryTargetId.value === logicalId) {
+    if (seq === sourceHistorySeq && currentHistoryTargetId.value === logicalId) {
       loadingSourceHistory.value = false
     }
   }
 }
 
-async function openNodeDetail(node: NormalizedNode) {
+async function openNodeDetail(node: NormalizedNode, navigationConfirmed = false) {
+  if (!navigationConfirmed && drawerOpen.value && selectedNode.value?.logicalId !== node.logicalId && nodeDrawer.value?.confirmNavigation() === false) return
   invalidateDeepLink()
   selectedNode.value = node
   probeFeedback.value = ''
@@ -487,7 +522,7 @@ async function openNodeByLogicalId(logicalId: string) {
 
   const localMatch = items.value.find((n) => n.logicalId === logicalId)
   if (localMatch) {
-    await openNodeDetail(localMatch)
+    await openNodeDetail(localMatch, true)
     return
   }
 
@@ -496,34 +531,34 @@ async function openNodeByLogicalId(logicalId: string) {
     const detailed = await fetchNodeDetail(logicalId)
     if (seq !== deepLinkSeq) return
     if (detailed && (!nodeDetailError.value || nodeDetailError.value.logicalId !== logicalId || !nodeDetailError.value.status)) {
-      await openNodeDetail(detailed)
+      await openNodeDetail(detailed, true)
     } else {
       const err = nodeDetailError.value
       if (err && err.logicalId === logicalId) {
         if (err.status === 404) {
-          deepLinkError.value = '未找到该节点（可能已移除），请刷新台账 (404)'
+          deepLinkError.value = uiText('未找到该节点（可能已移除），请刷新台账 (404)', 'Node not found (it may have been removed). Refresh the ledger (404)')
         } else if (err.status >= 500) {
-          deepLinkError.value = `获取节点详情失败 (${err.status})`
+          deepLinkError.value = uiText(`获取节点详情失败 (${err.status})`, `Failed to load node details (${err.status})`)
         } else if (err.status === 0) {
-          deepLinkError.value = '网络连接失败，请检查网络后重试'
+          deepLinkError.value = uiText('网络连接失败，请检查网络后重试', 'Network connection failed. Check your connection and retry.')
         } else {
-          deepLinkError.value = displayText(err.message) || `获取节点详情失败 (${err.status})`
+          deepLinkError.value = displayText(err.message) || uiText(`获取节点详情失败 (${err.status})`, `Failed to load node details (${err.status})`)
         }
       } else {
-        deepLinkError.value = '未找到该节点（可能已移除），请刷新台账 (404)'
+        deepLinkError.value = uiText('未找到该节点（可能已移除），请刷新台账 (404)', 'Node not found (it may have been removed). Refresh the ledger (404)')
       }
     }
   } catch (err: any) {
     if (seq !== deepLinkSeq) return
     const status = err?.status || (err instanceof ApiError ? err.status : 0)
     if (status === 404) {
-      deepLinkError.value = '未找到该节点（可能已移除），请刷新台账 (404)'
+      deepLinkError.value = uiText('未找到该节点（可能已移除），请刷新台账 (404)', 'Node not found (it may have been removed). Refresh the ledger (404)')
     } else if (status >= 500) {
-      deepLinkError.value = `获取节点详情失败 (${status})`
+      deepLinkError.value = uiText(`获取节点详情失败 (${status})`, `Failed to load node details (${status})`)
     } else if (status === 0) {
-      deepLinkError.value = '网络连接失败，请检查网络后重试'
+      deepLinkError.value = uiText('网络连接失败，请检查网络后重试', 'Network connection failed. Check your connection and retry.')
     } else {
-      deepLinkError.value = displayText(err?.message) || `获取节点详情失败 (${status})`
+      deepLinkError.value = displayText(err?.message) || uiText(`获取节点详情失败 (${status})`, `Failed to load node details (${status})`)
     }
     if (status === 404 && selectedIds.value.has(logicalId)) {
       const next = new Set(selectedIds.value)
@@ -549,7 +584,7 @@ async function handleSaveConnectionPayload({
   if (!selectedNode.value) return
   const res = await updateNodeConnection(selectedNode.value.logicalId, draft)
   if (!res.ok) {
-    onError(res.error || '连接参数无效')
+    onError(res.error || uiText('连接参数无效', 'Invalid connection parameters'))
     return
   }
   if (res.node) {
@@ -578,7 +613,7 @@ function handleRiskBandChange(band: string) {
 
 function handleRiskScoreChange(score: string) {
   if (score !== '' && parseQueryRiskScore(score) === '') {
-    toastStore.push({ tone: 'error', message: '风险分数上限必须为 0 到 100 的整数' })
+    toastStore.push({ tone: 'error', message: uiText('风险分数上限必须为 0 到 100 的整数', 'Maximum risk score must be an integer from 0 to 100') })
     return
   }
   riskScoreMax.value = score
@@ -662,7 +697,7 @@ const isAutoPaginating = ref(false)
 async function checkViewportStarvation() {
   if (typeof window === 'undefined') return
   if (healthFilter.value === 'all') return
-  if (loading.value || loadingMore.value || isAutoPaginating.value) return
+  if (loading.value || loadingMore.value || isAutoPaginating.value || appendError.value) return
   if (!hasMore.value) return
 
   if (filteredItems.value.length < 10 && consecutiveAutoPages.value < MAX_AUTO_PAGE_STEPS) {
@@ -710,7 +745,7 @@ function onScroll() {
   if (typeof window === 'undefined') return
   const scrollPosition = window.innerHeight + window.scrollY
   const threshold = document.documentElement.scrollHeight - 420
-  if (scrollPosition >= threshold) {
+  if (scrollPosition >= threshold && !appendError.value) {
     consecutiveAutoPages.value = 0
     loadMore()
   }
@@ -719,6 +754,9 @@ function onScroll() {
 watch(drawerOpen, (isOpen) => {
   if (!isOpen) {
     syncUrlFromState()
+    sourceHistorySeq++
+    currentHistoryTargetId.value = ''
+    invalidateNodeDetail()
     sourceHistory.value = null
     sourceHistoryError.value = ''
     loadingSourceHistory.value = false
@@ -727,14 +765,11 @@ watch(drawerOpen, (isOpen) => {
 
 if (route) {
   watch(
-    () => route.query?.node as string | undefined,
-    async (newNodeId) => {
-      const targetId = newNodeId?.trim()
+    () => queryNodeId(route.query?.node),
+    async (targetId) => {
       if (!targetId) {
         invalidateDeepLink()
-        if (drawerOpen.value) {
-          drawerOpen.value = false
-        }
+        drawerOpen.value = false
         return
       }
       if (selectedNode.value?.logicalId === targetId && drawerOpen.value) {
@@ -784,6 +819,7 @@ if (route) {
 }
 
 let poolPollTimer: ReturnType<typeof setInterval> | null = null
+let disposed = false
 
 function isPageVisible(): boolean {
   if (typeof document === 'undefined') return true
@@ -794,6 +830,8 @@ function hasActiveRuns(): boolean {
   return (
     probingNodeIds.value.size > 0 ||
     queuedNodeIds.value.size > 0 ||
+    probePendingIds.value.size > 0 ||
+    pendingResultRefreshIds.value.size > 0 ||
     probingNodeId.value !== null
   )
 }
@@ -821,6 +859,7 @@ onMounted(async () => {
 
   void fetchGlobalScheduleKinds()
   await load()
+  if (disposed) return
   pruneInvalidSelectedIds()
   checkViewportStarvation()
   if (typeof window !== 'undefined') {
@@ -836,14 +875,16 @@ onMounted(async () => {
     }
   }, 2000)
 
-  const initialNodeId = (route?.query?.node as string | undefined)?.trim()
+  const initialNodeId = queryNodeId(route?.query?.node)
   if (initialNodeId) {
     await openNodeByLogicalId(initialNodeId)
   }
 })
 
 onUnmounted(() => {
+  disposed = true
   invalidateDeepLink()
+  sourceHistorySeq++
   if (poolPollTimer) {
     clearInterval(poolPollTimer)
     poolPollTimer = null
@@ -860,7 +901,7 @@ onUnmounted(() => {
 <template>
   <section class="space-y-5" aria-labelledby="nodes-title">
     <!-- Screen-reader accessible section heading -->
-    <h2 id="nodes-title" class="sr-only">{{ uiText('节点列表与测速', 'Node Management & Probing') }}</h2>
+    <h2 id="nodes-title" class="sr-only">{{ uiText('节点列表与检测', 'Node management and probing') }}</h2>
 
     <!-- Modern Compact Toolbar with Filter Pills & Selection Controls -->
     <NodeListToolbar
@@ -874,6 +915,7 @@ onUnmounted(() => {
       :risk-band-filter="riskBandFilter"
       :risk-score-max="riskScoreMax"
       :speed-min="speedMinKiBS"
+      :applied-search-query="appliedSearchQuery"
       @update:speed-min="handleSpeedMinChange"
       @update:risk-band-filter="handleRiskBandChange"
       @update:risk-score-max="handleRiskScoreChange"
@@ -915,24 +957,26 @@ onUnmounted(() => {
           :disabled="loadingDeepLink"
           @click="openNodeByLogicalId(lastDeepLinkId)"
         >
-          重试
+          {{ uiText('重试', 'Retry') }}
         </button>
         <button
           type="button"
           class="btn btn-ghost btn-xs"
           @click="deepLinkError = ''"
         >
-          关闭
+          {{ uiText('关闭', 'Close') }}
         </button>
       </div>
     </div>
 
+    <p v-if="poolError" data-testid="node-pool-status-error" class="text-sm text-warning break-words [overflow-wrap:anywhere]" role="status">{{ poolError }}</p>
+
     <!-- Error Alert / Degraded State Card -->
     <ErrorStateCard
-      v-if="error"
-      :error="error"
-      :retrying="loading"
-      @retry="load"
+      v-if="error || appendError"
+      :error="appendError || error"
+      :retrying="loading || loadingMore"
+      @retry="appendError ? loadMore() : load()"
     />
 
     <!-- Skeleton Loading during initial fetch -->
@@ -950,18 +994,9 @@ onUnmounted(() => {
         v-if="filteredItems.length > 0"
         class="hidden md:flex items-center justify-between gap-3 px-4 py-2 text-xs font-semibold text-base-content/60 border-b border-base-300 mb-2 select-none"
       >
-        <div class="w-1/4 flex items-center gap-2">
-          <span>节点信息</span>
-        </div>
-        <div class="w-1/5">
-          <span>协议与端点</span>
-        </div>
-        <div class="flex-1">
-          <span>探测健康与能力</span>
-        </div>
-        <div class="shrink-0 text-right pr-2">
-          <span>状态与操作</span>
-        </div>
+        <div class="w-1/4">{{ uiText('节点信息', 'Node') }}</div>
+        <div class="flex-1">{{ uiText('探测健康与能力', 'Health and capabilities') }}</div>
+        <div class="shrink-0 text-right">{{ uiText('检测与详情', 'Probe and details') }}</div>
       </div>
 
       <div
@@ -987,6 +1022,8 @@ onUnmounted(() => {
               :node="node"
               :selected="selectedIds.has(node.logicalId)"
               :probe-state="getNodeProbeState(node)"
+              :probe-pending="probePendingIds.has(node.logicalId)"
+              :probe-run-state="probeStates[node.logicalId]"
               :speed-busy="speedingNodeId === node.logicalId"
               :speed-disabled="Boolean(speedingNodeId)"
               :speed-failed="speedFailedIds.has(node.logicalId)"
@@ -1015,7 +1052,7 @@ onUnmounted(() => {
             data-testid="manual-load-more-btn"
             @click="manualLoadMore"
           >
-            继续加载更多节点
+            {{ appendError ? uiText('重试加载下一页', 'Retry next page') : uiText('继续加载更多节点', 'Load more nodes') }}
           </button>
         </div>
         <p v-if="!hasMore" class="text-xs opacity-60">{{ t('nodes.allLoaded') }}</p>
@@ -1044,7 +1081,7 @@ onUnmounted(() => {
             class="btn btn-sm btn-outline btn-primary"
             @click="manualLoadMore"
           >
-            已自动检索 3 页无匹配 · 继续加载更多节点
+            {{ uiText('已自动检索 3 页无匹配 · 继续加载更多节点', 'No matches in 3 automatically searched pages · Load more nodes') }}
           </button>
         </div>
       </div>
@@ -1052,17 +1089,19 @@ onUnmounted(() => {
 
     <!-- Node Detail, Edit & Preview Drawer -->
     <NodeDetailDrawer
+      ref="nodeDrawer"
       v-model="drawerOpen"
       :node="selectedNode"
       :source-history="sourceHistory"
       :loading-source-history="loadingSourceHistory"
       :source-history-error="sourceHistoryError"
       :probe-state="selectedNode ? getNodeProbeState(selectedNode) : 'idle'"
-      :probe-feedback="probeFeedback"
+      :probe-feedback="selectedProbeFeedback"
+      :probe-pending="Boolean(selectedNode && probePendingIds.has(selectedNode.logicalId))"
       :speed-busy="speedingNodeId === selectedNode?.logicalId"
       :speed-disabled="Boolean(speedingNodeId)"
       :speed-failed="Boolean(selectedNode && speedFailedIds.has(selectedNode.logicalId))"
-      :speed-feedback="speedFeedback"
+      :speed-feedback="speedFeedbackTarget === selectedNode?.logicalId ? speedFeedback : ''"
       @speed-node="requestSpeed"
       :saving-connection="savingConnection"
       :loading-detail="loadingDetail"
@@ -1078,36 +1117,33 @@ onUnmounted(() => {
     <ConfirmModal
       :model-value="Boolean(speedTarget)"
       :title="uiText('确认单节点带宽测速', 'Confirm single-node speed measurement')"
-      :message="`仅对「${speedTarget?.displayName || ''}」测速一次，将产生真实流量（应用响应体上限 5 MiB，测速请求最长 10 秒；不代表网卡计费上限）。结果保存到节点状态，不创建自动测速计划。`"
+      :message="uiText(`仅对「${speedTarget?.displayName || ''}」测速一次，将产生真实流量（应用响应体上限 5 MiB，测速请求最长 10 秒；不代表网卡计费上限）。结果保存到节点状态，不创建自动测速计划。`, `Measure bandwidth once for “${speedTarget?.displayName || ''}”. This uses real traffic (application response body limit 5 MiB, request timeout 10 seconds; not a network billing limit). The result is saved without scheduling automatic measurements.`)"
       :confirm-text="uiText('开始测速', 'Measure speed')"
       tone="warning"
       data-testid="confirm-node-speed-modal"
       @confirm="confirmSpeed"
-      @cancel="speedTarget = null"
       @update:model-value="!$event && (speedTarget = null)"
     />
 
     <!-- Full Fleet Probe Confirmation Modal -->
     <ConfirmModal
       :model-value="confirmProbeAllOpen"
-      :title="t('nodes.confirmProbeAllTitle')"
-      :message="t('nodes.confirmProbeAllMessage')"
+      :title="uiText('确认检测全部启用订阅节点', 'Probe all enabled-subscription nodes?')"
+      :message="uiText('将对全部启用订阅节点发起普通检测，不受当前筛选和分页限制，不包含带宽测速。', 'Probe all nodes from enabled subscriptions, regardless of filters or pagination. Bandwidth is not measured.')"
       tone="warning"
       data-testid="confirm-probe-all-modal"
       @confirm="confirmExecuteProbeAll"
-      @cancel="confirmProbeAllOpen = false"
       @update:model-value="confirmProbeAllOpen = $event"
     />
 
     <!-- Scope Confirmation Modal for Selected Probes when hidden nodes exist -->
     <ConfirmModal
       :model-value="confirmProbeSelectedOpen"
-      :title="uiText('确认发起所选测速', 'Confirm Selected Probe')"
+      :title="uiText('确认发起所选普通检测', 'Confirm selected node probes')"
       :message="selectedScopeConfirmMessage"
       tone="warning"
       data-testid="confirm-probe-selected-modal"
       @confirm="executeProbeSelected"
-      @cancel="confirmProbeSelectedOpen = false"
       @update:model-value="confirmProbeSelectedOpen = $event"
     />
 

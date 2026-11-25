@@ -21,6 +21,7 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     toastStore.clear()
     setLocale('zh-CN')
     vi.restoreAllMocks()
+    vi.spyOn(api, 'get').mockResolvedValue({ export_mode: 'open' })
 
     if (!HTMLDialogElement.prototype.showModal) {
       HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
@@ -269,7 +270,7 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
       manifest: {
         node_count: 1,
         excluded_count: 1,
-        excluded: [{ node_id: 'node-bad', code: 'unsupported_target_capability', reason: 'unsupported by Mihomo' }],
+        excluded: [{ node_id: 'node-bad', display_name: 'Tokyo Legacy', code: 'unsupported_target_capability', reason: 'unsupported by Mihomo' }],
       },
     }
     const post = vi.spyOn(api, 'post').mockResolvedValue(previewResult)
@@ -283,7 +284,7 @@ describe('CSP Dataflow Publications & Snapshot Publishing Specification', () => 
     expect(post).toHaveBeenCalledWith('/api/v1/publications/preview', { target: 'mihomo' })
     expect(container.querySelector('[data-testid="compat-mode-select"]')).toBeNull()
     expect(container.textContent).not.toContain('compatible / strict')
-    expect(container.querySelector('[data-testid="preview-exclusions"]')?.textContent).toContain('已排除节点 1')
+    expect(container.querySelector('[data-testid="preview-exclusions"]')?.textContent).toContain('Tokyo Legacy')
     expect(container.querySelector('[data-testid="preview-exclusions"]')?.textContent).toContain('unsupported by Mihomo')
     expect(container.textContent).not.toContain('node-bad')
     expect(container.textContent).not.toContain('snap-preview-1')

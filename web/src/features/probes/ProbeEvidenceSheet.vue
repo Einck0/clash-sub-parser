@@ -1,505 +1,222 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { ClockIcon, BoltIcon, InformationCircleIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/vue/24/outline'
 import { displayName, displayText } from '../../utils/displayNames'
-import {
-  XMarkIcon,
-  ClockIcon,
-  BoltIcon,
-  InformationCircleIcon,
-} from '@heroicons/vue/24/outline'
+import DrawerCard from '../../ui/DrawerCard.vue'
+import StatusBadge from '../../ui/StatusBadge.vue'
+import { uiText } from '../../locales'
 import type { ProbeObservation, ProbeRun } from './probeTypes'
 import {
-  formatLatency,
-  formatObservationReasonLabel,
-  formatAttemptCategory,
-  formatRelativeTime,
-  formatPlatformBadge,
-  formatSpeed,
-  normalizePlatforms,
-  isPolicyOrConfigBlockedReason,
-  parseRedactedSummary,
-  probeKindEmoji,
-  probeKindLabel,
-  probeStateLabel,
-  probeVerdictLabel,
-  probeVerdictTone,
-  type PlatformBadge,
+  formatLatency, formatObservationReasonLabel, formatAttemptCategory, formatRelativeTime,
+  formatPlatformBadge, formatSpeed, normalizePlatforms, isPolicyOrConfigBlockedReason,
+  parseRedactedSummary, probeKindEmoji, probeKindLabel, probeStateLabel,
+  probeVerdictLabel, probeVerdictTone, type PlatformBadge,
 } from './probeTypes'
 import {
-  formatNodeLatency,
-  nodeHealthBadge,
-  nodeHealthDiagnostic,
-  nodeLatencyTone,
-  resolveNodeLatencyMs,
-  type NormalizedNode,
+  formatNodeLatency, nodeHealthBadge, nodeHealthDiagnostic, nodeLatencyTone,
+  resolveNodeLatencyMs, type NormalizedNode,
 } from '../nodes/nodeView'
-import StatusBadge from '../../ui/StatusBadge.vue'
-import { t } from '../../locales'
 
-const props = withDefaults(
-  defineProps<{
-    open: boolean
-    run?: ProbeRun | null
-    node?: NormalizedNode | null
-    nodeMap?: Record<string, NormalizedNode>
-    observations: ProbeObservation[]
-    loading: boolean
-    reprobing?: boolean
-  }>(),
-  {
-    run: null,
-    node: null,
-    nodeMap: () => ({}),
-    reprobing: false,
-  }
-)
+const props = withDefaults(defineProps<{
+  open: boolean
+  run?: ProbeRun | null
+  node?: NormalizedNode | null
+  nodeMap?: Record<string, NormalizedNode>
+  observations: ProbeObservation[]
+  loading: boolean
+  reprobing?: boolean
+  error?: string
+  stale?: boolean
+  total?: number
+  page?: number
+  pageSize?: number
+  retryPage?: number
+}>(), {
+  run: null, node: null, nodeMap: () => ({}), reprobing: false,
+  error: '', stale: false, page: 1, pageSize: 25,
+})
 
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'reprobe', node: NormalizedNode): void
+  (e: 'page', page: number): void
 }>()
+const selectedKind = ref('all')
+watch(() => [props.open, props.node?.logicalId, props.run?.id, props.page], () => { selectedKind.value = 'all' })
+const filteredObservations = computed(() => selectedKind.value === 'all'
+  ? props.observations : props.observations.filter((obs) => obs.kind === selectedKind.value))
+const kinds = computed(() => Array.from(new Set(props.observations.map((obs) => obs.kind))))
+const page = computed(() => props.page)
+const maxPage = computed(() => Math.max(1, Math.ceil((props.total ?? props.observations.length) / props.pageSize)))
 
-const selectedKind = ref<string>('all')
-
-watch(
-  () => [props.open, props.node?.logicalId, props.run?.id],
-  () => {
-    selectedKind.value = 'all'
-  }
-)
-
-const filteredObservations = computed(() => {
-  if (selectedKind.value === 'all') return props.observations
-  return props.observations.filter((obs) => obs.kind === selectedKind.value)
-})
-
-const kinds = computed(() => {
-  const set = new Set<string>()
-  props.observations.forEach((obs) => set.add(obs.kind))
-  return Array.from(set)
-})
+const currentNodeDiagnostic = computed(() => props.node ? nodeHealthDiagnostic(props.node) : null)
+const title = computed(() => props.node
+  ? displayName(props.node.displayName, uiText('未命名节点', 'Unnamed node'), props.node.logicalId)
+  : uiText('检测证据', 'Probe evidence'))
 
 function resolveObsNode(obs: ProbeObservation): NormalizedNode | null {
-  if (props.node && props.node.logicalId === obs.node_logical_id) {
-    return props.node
-  }
-  return props.nodeMap?.[obs.node_logical_id] ?? null
+  if (props.node?.logicalId === obs.node_logical_id) return props.node
+  return props.nodeMap[obs.node_logical_id] ?? null
 }
 
 function resolveObsNodeTitle(obs: ProbeObservation): string {
-  const resolved = resolveObsNode(obs)
-  return displayName(resolved?.displayName, '未知节点（来源不可用）', obs.node_logical_id)
+  return displayName(resolveObsNode(obs)?.displayName, uiText('未知节点（来源不可用）', 'Unknown node (source unavailable)'), obs.node_logical_id)
 }
 
 function resolveObsNodeEndpoint(obs: ProbeObservation): string {
-  const resolved = resolveObsNode(obs)
-  if (!resolved) return ''
-  const proto = resolved.protocol ? resolved.protocol.toUpperCase() : ''
-  const addr =
-    resolved.connection.server && resolved.connection.port
-      ? `${resolved.connection.server}:${resolved.connection.port}`
-      : resolved.connection.server || ''
-  return [proto, addr].filter(Boolean).join(' · ')
+  const node = resolveObsNode(obs)
+  if (!node) return ''
+  const { server, port } = node.connection
+  return [node.protocol.toUpperCase(), server && port ? `${server}:${port}` : server].filter(Boolean).join(' · ')
 }
 
-function formatHumanSummary(obs: ProbeObservation): {
-  statusBadge: string
-  explanation: string
-} {
-  const raw = (obs.redacted_summary || '').trim()
-  if (!raw) {
-    return {
-      statusBadge: '',
-      explanation: obs.verdict === 'available' ? '协议握手与连通校验正常' : '已完成该维度探测采样',
-    }
-  }
+function formatHumanSummary(obs: ProbeObservation): { statusBadge: string; explanation: string } {
+  const raw = obs.redacted_summary.trim()
   const parsed = parseRedactedSummary(raw)
-  const isMachineKeyValue = Boolean(parsed.profile || parsed.version || parsed.reason || parsed.statusCode !== undefined)
-  if (!isMachineKeyValue) {
-    return {
-      statusBadge: '',
-      explanation: displayText(raw),
-    }
+  const machineSummary = Boolean(parsed.profile || parsed.version || parsed.reason || parsed.statusCode !== undefined)
+  if (!machineSummary) return {
+    statusBadge: '',
+    explanation: displayText(raw || uiText('该检测维度的历史采样结果', 'Historical sample for this probe dimension')),
   }
-
-  const statusBadge =
-    parsed.statusCode !== undefined
-      ? `HTTP ${parsed.statusCode} ${parsed.statusCode >= 200 && parsed.statusCode < 400 ? '连通正常' : '响应受限'}`
-      : ''
   const parts: string[] = []
-  if (parsed.reasonLabel) {
-    parts.push(parsed.reasonLabel)
-  }
+  if (parsed.reasonLabel) parts.push(parsed.reasonLabel)
   if (parsed.error && parsed.error !== parsed.reason) {
-    parts.push(`诊断详情: ${formatObservationReasonLabel(parsed.error)}`)
-  }
-  if (parts.length === 0) {
-    parts.push(obs.verdict === 'available' ? '连接与响应正常' : '探测返回受限或待核验状态')
+    parts.push(`${uiText('诊断详情', 'Details')}: ${formatObservationReasonLabel(parsed.error)}`)
   }
   return {
-    statusBadge,
-    explanation: displayText(parts.join(' · ')),
+    statusBadge: parsed.statusCode !== undefined ? `HTTP ${parsed.statusCode}` : '',
+    explanation: displayText(parts.join(' · ') || uiText('该检测维度的历史采样结果', 'Historical sample for this probe dimension')),
   }
 }
 
-function observationVerdictBadge(obs: ProbeObservation): {
-  label: string
-  tone: 'success' | 'warning' | 'error' | 'info'
-} {
-  const parsed = parseRedactedSummary(obs.redacted_summary || '')
+function observationVerdictBadge(obs: ProbeObservation): { label: string; tone: 'success' | 'warning' | 'error' | 'info' } {
+  const parsed = parseRedactedSummary(obs.redacted_summary)
   if (obs.verdict === 'error' && isPolicyOrConfigBlockedReason(parsed.reason)) {
-    return {
-      label: '未判定 · 安全/配置阻断',
-      tone: 'warning',
-    }
+    return { label: uiText('未判定 · 安全/配置阻断', 'Unverified · policy/configuration blocked'), tone: 'warning' as const }
   }
   if (obs.verdict === 'error' && parsed.reason === 'transport_error') {
-    return {
-      label: '未知 · 待复核',
-      tone: 'info',
-    }
+    return { label: uiText('未知 · 待复核', 'Unknown · needs verification'), tone: 'info' as const }
   }
   const tone = probeVerdictTone(obs.verdict)
   return {
     label: probeVerdictLabel(obs.verdict),
-    tone: tone === 'error' ? 'error' : tone === 'success' ? 'success' : tone === 'warning' ? 'warning' : 'info',
+    tone: tone === 'success' ? 'success' : tone === 'warning' ? 'warning' : tone === 'error' ? 'error' : 'info',
   }
 }
-
-const currentNodeDiagnostic = computed(() => {
-  if (!props.node) return null
-  return nodeHealthDiagnostic(props.node)
-})
 
 function formatObsTime(iso: string): string {
-  if (!iso) return '--'
-  try {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return iso
-    return `${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} (${formatRelativeTime(iso)})`
-  } catch {
-    return iso
-  }
-}
-
-function close() {
-  emit('close')
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : `${date.toLocaleString()} (${formatRelativeTime(iso)})`
 }
 
 function resolveObservationPlatforms(obs: ProbeObservation): PlatformBadge[] {
   let platforms = obs.platforms
-  if (!platforms && obs.redacted_summary && obs.redacted_summary.startsWith('{')) {
+  if (!platforms && obs.redacted_summary.startsWith('{')) {
     try {
-      const parsed = JSON.parse(obs.redacted_summary)
-      if (parsed.platforms) {
-        platforms = normalizePlatforms(parsed.platforms)
-      }
+      const summary = JSON.parse(obs.redacted_summary)
+      platforms = normalizePlatforms(summary.platforms)
     } catch {
-      // ignore
+      // 旧记录的非结构化摘要仍在正文展示，不据此伪造平台结果
     }
   }
   if (!platforms) return []
-  const canonicalOrder =
-    obs.kind === 'streaming'
-      ? ['netflix', 'youtube', 'disney']
-      : ['openai', 'claude', 'gemini', 'antigravity']
-  const allKeys = Object.keys(platforms)
-  const sortedKeys = [
-    ...canonicalOrder.filter((k) => allKeys.includes(k)),
-    ...allKeys.filter((k) => !canonicalOrder.includes(k)),
-  ]
-  return sortedKeys.map((key) => formatPlatformBadge(key, platforms![key]))
+  const order = obs.kind === 'streaming' ? ['netflix', 'youtube', 'disney'] : ['openai', 'claude', 'gemini', 'antigravity']
+  const keys = Object.keys(platforms)
+  return [...order.filter((key) => keys.includes(key)), ...keys.filter((key) => !order.includes(key))]
+    .map((key) => formatPlatformBadge(key, platforms![key]))
 }
 </script>
 
 <template>
-  <!-- 40% Soft Backdrop Blur Overlay -->
-  <Transition
-    enter-active-class="transition-opacity duration-200 ease-out"
-    enter-from-class="opacity-0"
-    enter-to-class="opacity-100"
-    leave-active-class="transition-opacity duration-150 ease-in"
-    leave-from-class="opacity-100"
-    leave-to-class="opacity-0"
-  >
-    <div
-      v-if="open"
-      class="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
-      @click="close"
-    />
-  </Transition>
-
-  <!-- Bottom Sheet (Mobile) & Modal / Drawer (Desktop) -->
-  <Transition
-    enter-active-class="transition-all duration-200 ease-out"
-    enter-from-class="translate-y-full md:translate-y-0 md:opacity-0 md:scale-95"
-    enter-to-class="translate-y-0 md:opacity-100 md:scale-100"
-    leave-active-class="transition-all duration-150 ease-in"
-    leave-from-class="translate-y-0 md:opacity-100 md:scale-100"
-    leave-to-class="translate-y-full md:translate-y-0 md:opacity-0 md:scale-95"
-  >
-    <section
-      v-if="open"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="sheet-title"
-      data-testid="probe-evidence-sheet"
-      class="fixed bottom-0 left-0 right-0 z-50 adaptive-surface-sheet md:max-h-[82vh] md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-full md:max-w-2xl bg-base-100 rounded-t-2xl md:rounded-2xl border-t md:border border-base-300 shadow-2xl flex flex-col overflow-hidden"
-    >
-      <!-- Grab Handle for Mobile Touch -->
-      <div class="md:hidden pt-3 pb-1 flex justify-center flex-shrink-0 cursor-grab">
-        <div class="w-12 h-1.5 rounded-full bg-base-content/20" />
-      </div>
-
-      <!-- Sheet Header -->
-      <header class="flex items-start justify-between p-4 sm:p-5 border-b border-base-300 min-h-0 overflow-y-auto gap-3">
-        <div class="min-w-0 flex-1">
+  <DrawerCard :model-value="open" :title="title" :description="uiText('以下为采样当时的证据，不保证当前连接、账号权限或模型可用性。', 'Evidence reflects the time of sampling, not current connectivity, account permissions, or model access.')" width-class="max-w-3xl" @close="emit('close')">
+    <section data-testid="probe-evidence-sheet" class="space-y-4 min-w-0">
+      <header class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 space-y-2">
           <div class="flex flex-wrap items-center gap-2">
-            <span class="text-xs font-semibold uppercase tracking-wider text-primary">
-              {{ t('probes.evidenceTitle') }}
-            </span>
-            <StatusBadge
-              v-if="node && reprobing"
-              data-testid="evidence-node-probe-state-badge"
-              label="⚡ 检测中"
-              tone="info"
-              :pulse="true"
-            />
-            <StatusBadge
-              v-if="node"
-              data-testid="evidence-node-health-badge"
-              :label="nodeHealthBadge(node).label"
-              :tone="nodeHealthBadge(node).tone"
-            />
-            <StatusBadge
-              v-if="node && resolveNodeLatencyMs(node) !== null"
-              :label="formatNodeLatency(node)"
-              :tone="nodeLatencyTone(node)"
-            />
-            <StatusBadge
-              v-else-if="run"
-              :label="probeStateLabel(run.state)"
-              :tone="run.state === 'succeeded' ? 'success' : run.state === 'failed' ? 'error' : run.state === 'queued' ? 'warning' : 'info'"
-            />
+            <StatusBadge v-if="node && reprobing" data-testid="evidence-node-probe-state-badge" :label="uiText('检测中', 'Probing')" tone="info" :pulse="true" />
+            <StatusBadge v-if="node" data-testid="evidence-node-health-badge" :label="nodeHealthBadge(node).label" :tone="nodeHealthBadge(node).tone" />
+            <StatusBadge v-if="node && resolveNodeLatencyMs(node) !== null" :label="formatNodeLatency(node)" :tone="nodeLatencyTone(node)" />
+            <StatusBadge v-else-if="run" :label="probeStateLabel(run.state)" :tone="run.state === 'succeeded' ? 'success' : run.state === 'failed' ? 'error' : 'info'" />
           </div>
-
-          <h2 id="sheet-title" class="mt-1 text-lg sm:text-xl font-bold truncate">
-            {{ node ? displayName(node.displayName, '未命名节点', node.logicalId) : t('probes.evidenceTitle') }}
-          </h2>
-
-          <div v-if="node" class="mt-1 flex flex-wrap items-center gap-2 text-xs opacity-75 font-mono">
-            <span class="badge badge-xs badge-outline uppercase">{{ node.protocol }}</span>
-            <span v-if="node.connection.server && node.connection.port">
-              {{ node.connection.server }}:{{ node.connection.port }}
-            </span>
-          </div>
-          <p v-else-if="run" class="mt-0.5 text-xs opacity-65 truncate">
-            {{ t('probes.evidenceDesc') }}
-          </p>
+          <p v-if="node" class="text-xs break-all opacity-70">{{ node.protocol.toUpperCase() }} · {{ node.connection.server }}<template v-if="node.connection.port">:{{ node.connection.port }}</template></p>
+          <p v-if="run" class="text-xs opacity-70">{{ uiText('运行时间', 'Run created') }} · {{ new Date(run.created_at).toLocaleString() }}</p>
         </div>
-
-        <div class="flex items-center gap-2 shrink-0">
-          <button
-            v-if="node"
-            type="button"
-            data-testid="evidence-reprobe-btn"
-            class="btn btn-primary btn-xs sm:btn-sm gap-1.5"
-            :disabled="reprobing"
-            @click="emit('reprobe', node)"
-          >
-            <BoltIcon class="w-4 h-4" :class="{ 'animate-spin': reprobing }" />
-            <span>{{ reprobing ? '正在测速...' : '重新测速此节点' }}</span>
-          </button>
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm btn-circle sticky top-0"
-            aria-label="关闭面板"
-            @click="close"
-          >
-            <XMarkIcon class="w-5 h-5" />
-          </button>
-        </div>
+        <button v-if="node" type="button" data-testid="evidence-reprobe-btn" class="btn btn-primary btn-sm" :disabled="reprobing" @click="emit('reprobe', node)">
+          <BoltIcon class="w-4 h-4" :class="{ 'animate-pulse': reprobing }" />
+          {{ reprobing ? uiText('正在检测…', 'Probing…') : uiText('重新检测此节点', 'Probe this node again') }}
+        </button>
       </header>
 
-      <!-- Kind Filter Bar -->
-      <div v-if="kinds.length > 1" class="px-4 py-2 bg-base-200/50 border-b border-base-300 flex items-center gap-1.5 overflow-x-auto text-xs flex-shrink-0">
-        <span class="opacity-60 mr-1">检测维度：</span>
-        <button
-          type="button"
-          class="btn btn-xs rounded-lg"
-          :class="selectedKind === 'all' ? 'btn-primary' : 'btn-ghost'"
-          @click="selectedKind = 'all'"
-        >
-          全部 ({{ observations.length }})
-        </button>
-        <button
-          v-for="kind in kinds"
-          :key="kind"
-          type="button"
-          class="btn btn-xs rounded-lg"
-          :class="selectedKind === kind ? 'btn-primary' : 'btn-ghost'"
-          @click="selectedKind = kind"
-        >
-          {{ probeKindEmoji(kind) }} {{ probeKindLabel(kind) }}
-        </button>
+      <div v-if="node && currentNodeDiagnostic" data-testid="evidence-node-diagnostic-banner" class="rounded-xl border border-base-300 bg-base-200 p-3 text-xs leading-relaxed break-words">
+        <strong>{{ currentNodeDiagnostic.shortLabel }}：</strong>{{ displayText(currentNodeDiagnostic.detail) }}
+      </div>
+      <div v-if="error" role="alert" class="alert alert-error text-sm items-start">
+        <p class="min-w-0 flex-1 whitespace-pre-wrap break-words">{{ displayText(error) }}</p>
+        <button type="button" class="btn btn-xs" :disabled="loading" @click="emit('page', retryPage ?? page)">{{ uiText('重试', 'Retry') }}</button>
+      </div>
+      <p v-if="stale" class="text-xs text-warning">{{ uiText('正在刷新或刷新失败；以下为上次成功载入的证据。', 'Refreshing or refresh failed; showing previously loaded evidence.') }}</p>
+      <div v-if="kinds.length > 1" class="flex flex-wrap items-center gap-2 text-xs" :aria-label="uiText('筛选本页检测维度', 'Filter this page by probe kind')">
+        <span>{{ uiText('本页维度', 'Kinds on this page') }}</span>
+        <button type="button" class="btn btn-xs" :class="selectedKind === 'all' ? 'btn-primary' : 'btn-ghost'" :aria-pressed="selectedKind === 'all'" @click="selectedKind = 'all'">{{ uiText('全部', 'All') }} ({{ observations.length }})</button>
+        <button v-for="kind in kinds" :key="kind" type="button" class="btn btn-xs" :class="selectedKind === kind ? 'btn-primary' : 'btn-ghost'" :aria-pressed="selectedKind === kind" @click="selectedKind = kind">{{ probeKindEmoji(kind) }} {{ probeKindLabel(kind) }}</button>
+      </div>
+      <div v-if="loading && observations.length === 0" role="status" class="py-8 text-center text-sm opacity-70">{{ uiText('正在载入证据…', 'Loading evidence…') }}</div>
+      <div v-else-if="!error && filteredObservations.length === 0" class="rounded-xl border border-dashed border-base-300 p-8 text-center">
+        <InformationCircleIcon class="w-8 h-8 mx-auto opacity-40" />
+        <p class="mt-2 font-medium text-sm">{{ uiText('暂无观测记录', 'No observations') }}</p>
+        <p class="mt-1 text-xs opacity-60">{{ uiText('本页没有匹配记录；运行完成后可刷新历史重新查看。', 'No matching observations on this page. Refresh history after the run completes.') }}</p>
       </div>
 
-      <!-- Observations Content -->
-      <div class="flex-1 min-h-0 p-4 sm:p-5 overflow-y-auto overscroll-contain space-y-3">
-        <div
-          v-if="node && currentNodeDiagnostic"
-          data-testid="evidence-node-diagnostic-banner"
-          class="rounded-xl border px-3.5 py-2.5 text-xs leading-relaxed"
-          :class="
-            currentNodeDiagnostic.isBlockedByPolicyOrConfig
-              ? 'bg-warning/10 border-warning/30 text-warning'
-              : 'bg-base-200/80 border-base-300 text-base-content/85'
-          "
-        >
-          <span class="font-semibold">{{ currentNodeDiagnostic.shortLabel }}：</span>
-          <span>{{ displayText(currentNodeDiagnostic.detail) }}</span>
+      <article v-for="obs in filteredObservations" :key="obs.id" data-testid="observation-card" class="rounded-xl border border-base-300 bg-base-200/70 p-3.5 space-y-3 min-w-0">
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div class="flex flex-wrap items-center gap-2 min-w-0">
+            <span class="badge badge-sm badge-primary badge-outline">{{ probeKindEmoji(obs.kind) }} {{ probeKindLabel(obs.kind) }}</span>
+            <span class="font-semibold text-sm break-words">{{ resolveObsNodeTitle(obs) }}</span>
+          </div>
+          <StatusBadge :label="observationVerdictBadge(obs).label" :tone="observationVerdictBadge(obs).tone" />
         </div>
-
-        <div v-if="loading" class="space-y-3">
-          <div v-for="i in 3" :key="i" class="skeleton h-24 rounded-xl" />
+        <p v-if="resolveObsNodeEndpoint(obs)" class="font-mono text-xs opacity-60 break-all">{{ resolveObsNodeEndpoint(obs) }}</p>
+        <div class="text-xs leading-relaxed whitespace-pre-wrap break-words">
+          <span v-if="formatHumanSummary(obs).statusBadge" data-testid="observation-http-badge" class="badge badge-xs badge-ghost mr-2">{{ formatHumanSummary(obs).statusBadge }}</span>
+          {{ formatHumanSummary(obs).explanation }}
         </div>
-
-        <div
-          v-else-if="filteredObservations.length === 0"
-          class="rounded-xl border border-dashed border-base-300 p-8 text-center"
-        >
-          <InformationCircleIcon class="w-8 h-8 mx-auto opacity-40 text-info" />
-          <p class="mt-2 font-medium text-sm">暂无观测记录</p>
-          <p class="mt-1 text-xs opacity-60">可点击上方「重新测速此节点」或「一键全量测速」立即采样。</p>
-        </div>
-
-        <article
-          v-for="obs in filteredObservations"
-          :key="obs.id"
-          data-testid="observation-card"
-          class="card bg-base-200/80 border border-base-300/80 rounded-xl p-3.5 transition-all duration-200 ease-out hover:border-primary/40"
-        >
-          <div class="flex items-start justify-between gap-2">
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="badge badge-sm font-semibold tracking-wider badge-primary badge-outline">
-                  {{ probeKindEmoji(obs.kind) }} {{ probeKindLabel(obs.kind) }}
-                </span>
-                <span class="text-xs font-semibold truncate">
-                  {{ resolveObsNodeTitle(obs) }}
-                </span>
-                <span
-                  v-if="resolveObsNodeEndpoint(obs)"
-                  class="text-[11px] font-mono opacity-60 truncate"
-                >
-                  {{ resolveObsNodeEndpoint(obs) }}
-                </span>
-              </div>
-
-              <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                <span
-                  v-if="formatHumanSummary(obs).statusBadge"
-                  data-testid="observation-http-badge"
-                  class="badge badge-xs badge-ghost font-mono"
-                >
-                  {{ formatHumanSummary(obs).statusBadge }}
-                </span>
-                <span class="text-base-content/85 leading-relaxed">
-                  {{ formatHumanSummary(obs).explanation }}
-                </span>
-              </div>
-
-              <!-- Multi-platform capabilities breakdown -->
-              <div
-                v-if="resolveObservationPlatforms(obs).length > 0"
-                data-testid="observation-platforms-grid"
-                class="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2"
-              >
-                <div
-                  v-for="badge in resolveObservationPlatforms(obs)"
-                  :key="`obs-platform-${badge.platform}`"
-                  class="flex items-center justify-between p-2 rounded-lg bg-base-100 border border-base-300/80 text-xs"
-                >
-                  <div class="min-w-0 pr-2">
-                    <span class="font-medium truncate block">{{ badge.platform.toUpperCase() }}</span>
-                    <span v-if="badge.subTier" class="text-[10px] opacity-60 truncate block">{{ badge.subTier }}</span>
-                  </div>
-                  <StatusBadge
-                    :label="badge.label"
-                    :tone="badge.tone"
-                    :title="displayText(badge.tooltip)"
-                  />
-                </div>
-              </div>
-
-              <!-- Speed throughput badge -->
-              <div
-                v-if="obs.throughput !== undefined && obs.throughput > 0"
-                data-testid="observation-speed-row"
-                class="mt-2 flex items-center gap-2 text-xs"
-              >
-                <span class="badge badge-sm badge-info badge-outline font-mono">
-                  🚀 带宽速率：{{ formatSpeed(obs.throughput) }}
-                </span>
-              </div>
-
-              <!-- IP Risk score badge -->
-              <div
-                v-if="obs.risk_score !== undefined && obs.risk_score !== ''"
-                data-testid="observation-risk-row"
-                class="mt-2 flex items-center gap-2 text-xs"
-              >
-                <span class="badge badge-sm badge-outline font-mono">
-                  🛡️ 风险评分：{{ obs.risk_score }}
-                </span>
-              </div>
-
-              <!-- Attempt details breakdown if attempt evidence present -->
-              <div
-                v-if="obs.attempt"
-                data-testid="observation-attempt-box"
-                class="mt-2.5 p-2 rounded-lg bg-base-100/80 border border-base-300 text-xs space-y-1 font-mono"
-              >
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="opacity-75">执行状态：{{ obs.attempt.executed ? '已执行出站' : '未执行/跳过' }}</span>
-                  <span v-if="obs.attempt.category" class="badge badge-xs badge-ghost">{{ formatAttemptCategory(obs.attempt.category) }}</span>
-                </div>
-                <div v-if="obs.attempt.reason" class="text-[11px] text-base-content/80">
-                  原因: {{ displayText(formatObservationReasonLabel(obs.attempt.reason)) }}
-                </div>
-              </div>
+        <div v-if="resolveObservationPlatforms(obs).length" data-testid="observation-platforms-grid" class="grid grid-cols-1 gap-2">
+          <div v-for="badge in resolveObservationPlatforms(obs)" :key="badge.platform" class="rounded-lg bg-base-100 border border-base-300 p-3 min-w-0 space-y-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-xs font-semibold">{{ badge.platform.toUpperCase() }}</span>
+              <StatusBadge :label="badge.label" :tone="badge.tone" />
             </div>
-            <StatusBadge
-              :label="observationVerdictBadge(obs).label"
-              :tone="observationVerdictBadge(obs).tone"
-            />
+            <p v-if="badge.tooltip" data-testid="platform-evidence-text" class="text-xs leading-relaxed whitespace-pre-wrap break-words text-base-content/75">{{ displayText(badge.tooltip) }}</p>
           </div>
-
-          <div class="mt-3 pt-2.5 border-t border-base-300/50 flex flex-wrap items-center justify-between gap-2 text-[11px] opacity-75">
-            <span class="flex items-center gap-1">
-              <ClockIcon class="w-3.5 h-3.5" />
-              响应延迟：<strong class="font-mono font-semibold">{{ obs.verdict === 'error' || obs.latency_ms <= 0 ? '--' : formatLatency(obs.latency_ms) }}</strong>
-            </span>
-            <span class="font-mono">
-              检测时间：{{ formatObsTime(obs.observed_at) }}
-            </span>
+        </div>
+        <div v-if="obs.throughput !== undefined && obs.throughput > 0" data-testid="observation-speed-row" class="text-xs space-y-1">
+          <span class="badge badge-sm badge-info badge-outline">{{ uiText('历史带宽速率', 'Historical throughput') }}: {{ formatSpeed(obs.throughput) }}</span>
+          <p class="opacity-65">{{ uiText('仅代表该次采样，不代表当前测速成功或当前可用带宽。', 'This sample does not establish a successful current speed test or current bandwidth.') }}</p>
+        </div>
+        <p v-if="obs.risk_score" data-testid="observation-risk-row" class="text-xs">{{ uiText('风险评分', 'Risk score') }}: {{ displayText(obs.risk_score) }}</p>
+        <div v-if="obs.attempt" data-testid="observation-attempt-box" class="rounded-lg border border-base-300 bg-base-100 p-2 text-xs space-y-1 break-words">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span>{{ uiText('执行状态', 'Execution') }}: {{ obs.attempt.executed ? uiText('已执行出站', 'Outbound attempt executed') : uiText('未执行/跳过', 'Not executed / skipped') }}</span>
+            <span v-if="obs.attempt.category" class="badge badge-xs badge-ghost">{{ formatAttemptCategory(obs.attempt.category) }}</span>
           </div>
-        </article>
-      </div>
-
-      <!-- Sheet Footer -->
-      <footer class="p-3 border-t border-base-300 bg-base-200/40 flex justify-between items-center flex-shrink-0">
-        <span class="text-xs opacity-60">
-          共 {{ filteredObservations.length }} 条测速记录
-        </span>
-        <button
-          type="button"
-          class="btn btn-sm btn-ghost"
-          @click="close"
-        >
-          {{ t('common.close') }}
-        </button>
-      </footer>
+          <p v-if="obs.attempt.reason">{{ uiText('原因', 'Reason') }}: {{ displayText(formatObservationReasonLabel(obs.attempt.reason)) }}</p>
+        </div>
+        <div class="border-t border-base-300 pt-2 flex flex-wrap items-center justify-between gap-2 text-xs opacity-70">
+          <span class="flex items-center gap-1"><ClockIcon class="w-3.5 h-3.5" />{{ uiText('响应延迟', 'Latency') }}: {{ obs.verdict === 'error' || obs.latency_ms <= 0 ? '--' : formatLatency(obs.latency_ms) }}</span>
+          <span>{{ uiText('检测时间', 'Observed') }}: {{ formatObsTime(obs.observed_at) }}</span>
+        </div>
+      </article>
     </section>
-  </Transition>
+    <template #footer>
+      <div class="w-full flex flex-wrap items-center justify-between gap-3 text-xs">
+        <span>{{ uiText('本页', 'On this page') }} {{ filteredObservations.length }}<template v-if="total !== undefined"> · {{ uiText('共', 'Total') }} {{ total }}</template></span>
+        <nav v-if="maxPage > 1" class="flex items-center gap-2" :aria-label="uiText('证据分页', 'Evidence pagination')">
+          <button type="button" class="btn btn-ghost btn-sm btn-square" :aria-label="uiText('上一页证据', 'Previous evidence page')" :disabled="page <= 1 || loading" @click="emit('page', page - 1)"><ChevronLeftIcon class="w-4 h-4" /></button>
+          <span>{{ page }} / {{ maxPage }}</span>
+          <button type="button" class="btn btn-ghost btn-sm btn-square" :aria-label="uiText('下一页证据', 'Next evidence page')" :disabled="page >= maxPage || loading" @click="emit('page', page + 1)"><ChevronRightIcon class="w-4 h-4" /></button>
+        </nav>
+        <button type="button" class="btn btn-ghost btn-sm" @click="emit('close')">{{ uiText('关闭', 'Close') }}</button>
+      </div>
+    </template>
+  </DrawerCard>
 </template>

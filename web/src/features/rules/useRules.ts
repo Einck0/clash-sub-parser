@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { api } from '../../api/client'
 import { displayText } from '../../utils/displayNames'
+import { uiText } from '../../locales/redesign'
 import {
   type RuleCategory,
   type PolicyRuleView,
@@ -29,6 +30,9 @@ export function useRules() {
   const saving = ref(false)
   const validating = ref(false)
   const error = ref<string | null>(null)
+  const busyRuleIds = ref<Set<string>>(new Set())
+  // An acknowledged write must never become a failed create merely because refresh failed.
+  const refreshRequired = ref(false)
 
   const searchQuery = ref('')
   const selectedCategoryId = ref<string | null>(null)
@@ -250,22 +254,61 @@ export function useRules() {
 
   // Load all initial data
   async function loadData(): Promise<void> {
+    if (loading.value || saving.value) return
     loading.value = true
     error.value = null
     try {
-      await Promise.all([fetchCategories(), fetchRules(), fetchGroups()])
+      const results = await Promise.allSettled([fetchCategories(), fetchRules(), fetchGroups()])
+      const failed = results.find(result => result.status === 'rejected')
+      if (failed?.status === 'rejected') throw failed.reason
+      refreshRequired.value = false
       syncFromUrl()
+    } catch (err) {
+      if (refreshRequired.value) setRefreshError(err)
+      throw err
     } finally {
       loading.value = false
     }
   }
 
+  function setRefreshError(err: unknown) {
+    const detail = displayText(err instanceof Error ? err.message : 'Failed to refresh rules')
+    error.value = uiText(
+      '修改已保存，但列表刷新失败。请重试读取确认结果，不要重复提交。',
+      'Changes were saved, but refreshing the list failed. Retry reading to confirm; do not submit again.'
+    ) + ' ' + detail
+  }
+
+  async function refreshCategoriesAndRules() {
+    const results = await Promise.allSettled([fetchCategories(), fetchRules()])
+    const failed = results.find(result => result.status === 'rejected')
+    if (failed?.status === 'rejected') throw failed.reason
+  }
+
+  async function refreshAfterWrite(read: () => Promise<unknown>) {
+    validationResult.value = null
+    refreshRequired.value = true
+    error.value = null
+    try {
+      await read()
+      refreshRequired.value = false
+    } catch (err) {
+      setRefreshError(err)
+    }
+  }
+
+  function requireFreshData() {
+    if (saving.value || loading.value) throw new Error(uiText('请等待当前操作完成', 'Wait for the current operation to finish.'))
+    if (refreshRequired.value) throw new Error(uiText('请先重新读取已保存的规则和分类', 'Reload saved rules and categories before editing again.'))
+  }
+
   // Category CRUD
   async function createCategory(payload: CreateCategoryPayload): Promise<RuleCategory> {
+    requireFreshData()
     saving.value = true
     try {
       const created = await api.post<RuleCategory>('/api/v1/policies/categories', payload)
-      await fetchCategories()
+      await refreshAfterWrite(fetchCategories)
       return created
     } finally {
       saving.value = false
@@ -273,13 +316,14 @@ export function useRules() {
   }
 
   async function updateCategory(id: string, payload: UpdateCategoryPayload): Promise<RuleCategory> {
+    requireFreshData()
     saving.value = true
     try {
       const updated = await api.put<RuleCategory>(
         `/api/v1/policies/categories/${encodeURIComponent(id)}`,
         payload
       )
-      await fetchCategories()
+      await refreshAfterWrite(fetchCategories)
       return updated
     } finally {
       saving.value = false
@@ -287,20 +331,22 @@ export function useRules() {
   }
 
   async function deleteCategory(id: string): Promise<void> {
+    requireFreshData()
     saving.value = true
     try {
       await api.delete(`/api/v1/policies/categories/${encodeURIComponent(id)}`)
-      await Promise.all([fetchCategories(), fetchRules()])
+      await refreshAfterWrite(refreshCategoriesAndRules)
     } finally {
       saving.value = false
     }
   }
 
   async function reorderCategories(orderedIds: string[]): Promise<void> {
+    requireFreshData()
     saving.value = true
     try {
       await api.put('/api/v1/policies/categories/reorder', { order: orderedIds })
-      await fetchCategories()
+      await refreshAfterWrite(fetchCategories)
     } finally {
       saving.value = false
     }
@@ -322,6 +368,7 @@ export function useRules() {
 
   // Rule CRUD
   async function createRule(payload: CreateRulePayload): Promise<PolicyRuleView> {
+    requireFreshData()
     saving.value = true
     try {
       const created = await api.post<PolicyRuleView>('/api/v1/policies/rules', {
@@ -329,7 +376,7 @@ export function useRules() {
         kind: 'policy',
         revision_id: payload.revision_id || activeRevisionId.value,
       })
-      await fetchRules()
+      await refreshAfterWrite(fetchRules)
       return created
     } finally {
       saving.value = false
@@ -337,13 +384,14 @@ export function useRules() {
   }
 
   async function updateRule(id: string, payload: UpdateRulePayload): Promise<PolicyRuleView> {
+    requireFreshData()
     saving.value = true
     try {
       const updated = await api.put<PolicyRuleView>(
         `/api/v1/policies/rules/${encodeURIComponent(id)}`,
         payload
       )
-      await fetchRules()
+      await refreshAfterWrite(fetchRules)
       return updated
     } finally {
       saving.value = false
@@ -351,23 +399,33 @@ export function useRules() {
   }
 
   async function deleteRule(id: string): Promise<void> {
+    requireFreshData()
     saving.value = true
     try {
       await api.delete(`/api/v1/policies/rules/${encodeURIComponent(id)}`, {
         params: { kind: 'policy' },
       })
-      await fetchRules()
+      await refreshAfterWrite(fetchRules)
     } finally {
       saving.value = false
     }
   }
 
   async function toggleRuleEnabled(rule: PolicyRuleView): Promise<void> {
-    const nextState = !rule.enabled
-    await updateRule(rule.id, { enabled: nextState })
+    if (busyRuleIds.value.has(rule.id)) return
+    busyRuleIds.value = new Set(busyRuleIds.value).add(rule.id)
+    try {
+      const nextState = !rule.enabled
+      await updateRule(rule.id, { enabled: nextState })
+    } finally {
+      const next = new Set(busyRuleIds.value)
+      next.delete(rule.id)
+      busyRuleIds.value = next
+    }
   }
 
   async function reorderRules(categoryId: string, orderedIds: string[]): Promise<void> {
+    requireFreshData()
     saving.value = true
     try {
       await api.put('/api/v1/policies/rules/reorder', {
@@ -375,7 +433,7 @@ export function useRules() {
         order: orderedIds,
         revision_id: activeRevisionId.value,
       })
-      await fetchRules()
+      await refreshAfterWrite(fetchRules)
     } finally {
       saving.value = false
     }
@@ -419,6 +477,7 @@ export function useRules() {
   }
 
   async function backfillRules(): Promise<{ count: number; status: string }> {
+    requireFreshData()
     saving.value = true
     try {
       const res = await api.post<{ count: number; status: string }>(
@@ -428,7 +487,7 @@ export function useRules() {
           params: activeRevisionId.value ? { revision_id: activeRevisionId.value } : undefined,
         }
       )
-      await Promise.all([fetchCategories(), fetchRules()])
+      await refreshAfterWrite(refreshCategoriesAndRules)
       return res
     } finally {
       saving.value = false
@@ -500,6 +559,8 @@ export function useRules() {
     saving,
     validating,
     error,
+    busyRuleIds,
+    refreshRequired,
     searchQuery,
     selectedCategoryId,
     validationResult,

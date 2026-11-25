@@ -3,12 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
 import DashboardView from './DashboardView.vue'
 import { api } from '../../api/client'
+import { setLocale } from '../../locales'
+import MetricSummary from './MetricSummary.vue'
+import type { DashboardMetrics } from './dashboardTypes'
 
 describe('DashboardView Component', () => {
   let container: HTMLDivElement
   let app: ReturnType<typeof createApp> | null = null
 
   beforeEach(() => {
+    setLocale('zh-CN')
     container = document.createElement('div')
     document.body.appendChild(container)
     vi.restoreAllMocks()
@@ -191,58 +195,49 @@ describe('DashboardView Component', () => {
     expect(staleBadge?.textContent).toContain('缓存')
   })
 
-  // 5. Stale Out-of-Order Response Discarded (过期request/session不覆新状态)
-  it('discards stale out-of-order response when a newer request settles first', async () => {
-    let resolveFirstRequest: ((val: any) => void) | null = null
-
-    let callCount = 0
-    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
-      if (path === '/healthz') return { status: 'healthy' }
-      if (path === '/api/v1/nodes') {
-        if (!options?.params?.active_only) {
-          callCount++
-          if (callCount === 1) {
-            // Slow first request
-            return new Promise((resolve) => {
-              resolveFirstRequest = resolve
-            })
-          }
-          // Fast second request
-          return { total: 99 }
-        }
-        return { total: 50 }
+  it('blocks duplicate refresh while initial sections are pending', async () => {
+    let finishNodes!: (value: { total: number }) => void
+    const getSpy = vi.spyOn(api, 'get').mockImplementation((path: string, options?: any) => {
+      if (path === '/healthz') return Promise.resolve({ status: 'healthy' })
+      if (path === '/api/v1/nodes' && !options?.params?.active_only) {
+        return new Promise(resolve => { finishNodes = resolve })
       }
-      return { total: 1 }
+      return Promise.resolve({ total: 5 })
     })
-
-    app = createApp({
-      render() {
-        return h(DashboardView)
-      },
-    })
+    app = createApp({ render: () => h(DashboardView) })
     app.mount(container)
     await nextTick()
-    // First request is still pending
-
-    // Trigger second request (refresh)
-    const refreshBtn = container.querySelector('[data-testid="refresh-all-btn"]') as HTMLButtonElement
-    expect(refreshBtn).toBeTruthy()
-    refreshBtn.click()
+    const refresh = container.querySelector('[data-testid="refresh-all-btn"]') as HTMLButtonElement
+    expect(refresh.disabled).toBe(true)
+    expect(refresh.getAttribute('aria-busy')).toBe('true')
+    const requests = getSpy.mock.calls.length
+    refresh.click()
+    expect(getSpy).toHaveBeenCalledTimes(requests)
+    expect(container.querySelector('[data-testid="metric-value-subscriptions"]')?.textContent?.trim()).toBe('5')
+    finishNodes({ total: 42 })
+    await Promise.resolve()
+    await Promise.resolve()
     await nextTick()
-    await new Promise((r) => setTimeout(r, 25))
-
-    // Second request resolved: nodes is 99
-    expect(container.querySelector('[data-testid="metric-value-nodes"]')?.textContent?.trim()).toBe('99')
-
-    // Now resolve the first (stale) request with outdated data (10)
-    if (resolveFirstRequest) {
-      ;(resolveFirstRequest as any)({ total: 10 })
-    }
     await nextTick()
-    await new Promise((r) => setTimeout(r, 25))
+    expect(refresh.disabled).toBe(false)
+    expect(container.querySelector('[data-testid="metric-value-nodes"]')?.textContent?.trim()).toBe('42')
+  })
 
-    // Stale response must be discarded; value must remain 99!
-    expect(container.querySelector('[data-testid="metric-value-nodes"]')?.textContent?.trim()).toBe('99')
+  it('keeps refresh-all disabled while only the health check remains pending', async () => {
+    let finishHealth!: (value: { status: string }) => void
+    vi.spyOn(api, 'get').mockImplementation((path: string) => path === '/healthz'
+      ? new Promise(resolve => { finishHealth = resolve })
+      : Promise.resolve({ total: 4 }))
+    app = createApp({ render: () => h(DashboardView) })
+    app.mount(container)
+    await nextTick()
+    const refresh = container.querySelector('[data-testid="refresh-all-btn"]') as HTMLButtonElement
+    expect(container.querySelector('[data-testid="metric-value-nodes"]')?.textContent?.trim()).toBe('4')
+    expect(refresh.disabled).toBe(true)
+    finishHealth({ status: 'healthy' })
+    await nextTick()
+    await nextTick()
+    expect(refresh.disabled).toBe(false)
   })
 
   // 6. Pure Navigation: quick actions and cards do NOT trigger probe or refresh mutations
@@ -282,7 +277,7 @@ describe('DashboardView Component', () => {
     settingsAction.click()
 
     // Click metric card
-    const nodeCard = container.querySelector('[data-testid="metric-card-nodes"]') as HTMLDivElement
+    const nodeCard = container.querySelector('[data-testid="metric-card-nodes"]') as HTMLButtonElement
     expect(nodeCard).toBeTruthy()
     nodeCard.click()
 
@@ -386,5 +381,56 @@ describe('DashboardView Component', () => {
     // Explicit disclaimer that probe batches are historical runs, not node health
     const probesCard = container.querySelector('[data-testid="metric-card-probes"]')
     expect(probesCard?.textContent).toContain('历史批次 (非节点健康)')
+  })
+
+  it('uses native focusable metric buttons with one navigation per activation', () => {
+    const metrics = Object.fromEntries(['subscriptions', 'nodes', 'activeNodes', 'policies', 'rules', 'probes'].map(key => [key, {
+      value: 3, status: 'success', error: null, isStale: false,
+    }])) as unknown as DashboardMetrics
+    const navigate = vi.fn()
+    app = createApp({ render: () => h(MetricSummary, { metrics, onNavigate: navigate }) })
+    app.mount(container)
+    for (const [key, route] of [['subscriptions', 'subscriptions'], ['nodes', 'nodes'], ['policies', 'policy'], ['rules', 'rules'], ['probes', 'nodes']]) {
+      const card = container.querySelector(`[data-testid="metric-card-${key}"]`) as HTMLButtonElement
+      expect(card.tagName).toBe('BUTTON')
+      expect(card.type).toBe('button')
+      expect(card.tabIndex).toBe(0)
+      card.focus()
+      expect(document.activeElement).toBe(card)
+      card.click()
+      expect(navigate).toHaveBeenLastCalledWith(route)
+    }
+    expect(navigate).toHaveBeenCalledTimes(5)
+    // jsdom does not synthesize native Enter/Space activation; real-browser keys remain an isolation acceptance check.
+  })
+
+  it('updates quick actions and metric labels on a live locale switch', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({ total: 4 })
+    app = createApp({ render: () => h(DashboardView) })
+    app.mount(container)
+    await nextTick()
+    expect(container.querySelector('[data-testid="quick-action-nodes"]')?.textContent).toContain('节点台账')
+    setLocale('en-US')
+    await nextTick()
+    expect(container.querySelector('[data-testid="quick-action-nodes"]')?.textContent).toContain('Node Ledger')
+    expect(container.querySelector('[data-testid="quick-action-subscriptions"]')?.textContent).toContain('Subscriptions')
+    expect(container.querySelector('[data-testid="metric-card-nodes"]')?.textContent).toContain('Not probe health')
+    expect(container.querySelector('[data-testid="metric-card-probes"]')?.textContent).toContain('Probe runs')
+  })
+
+  it('shows full wrapped error details and a stale active-subset count independently', () => {
+    const longError = `Unavailable: ${'gateway-'.repeat(50)}`
+    const metrics = Object.fromEntries(['subscriptions', 'nodes', 'activeNodes', 'policies', 'rules', 'probes'].map(key => [key, {
+      value: 3, status: 'success', error: null, isStale: false,
+    }])) as unknown as DashboardMetrics
+    metrics.activeNodes = { value: 2, status: 'error', error: longError, isStale: true }
+    app = createApp({ render: () => h(MetricSummary, { metrics }) })
+    app.mount(container)
+    expect(container.querySelector('[data-testid="metric-value-nodes"]')?.textContent?.trim()).toBe('3')
+    expect(container.querySelector('[data-testid="metric-value-activeNodes"]')?.textContent).toBe('2')
+    expect(container.querySelector('[data-testid="metric-stale-activeNodes"]')).not.toBeNull()
+    const detail = container.querySelector('[data-testid="metric-error-detail-activeNodes"]')
+    expect(detail?.textContent).toBe(longError)
+    expect(detail?.className).not.toContain('truncate')
   })
 })

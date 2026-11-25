@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
+import { matchedRouteKey, onBeforeRouteLeave } from 'vue-router'
 import { PlusIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import DrawerCard from '../../ui/DrawerCard.vue'
 import { t } from '../../locales'
@@ -23,10 +24,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'save', draft: SubscriptionDraft): void
+  (e: 'save', draft: SubscriptionDraft, settled: (error?: string) => void): void
 }>()
 
 const activeTab = ref<'basic' | 'advanced'>('basic')
+const submitting = ref(false)
+const busy = computed(() => props.saving || submitting.value)
 const draft = ref<SubscriptionDraft>({
   name: '',
   source_url_secret_ref: '',
@@ -67,10 +70,16 @@ function getDraftSnapshot(): string {
 }
 
 const initialSnapshot = ref<string>('')
+let draftSession = 0
 
 watch(
-  () => [props.modelValue, props.subscription],
-  ([open]) => {
+  () => [props.modelValue, props.subscription?.id] as const,
+  ([open, id], previous) => {
+    if (!open) { draftSession++; return }
+    if (previous?.[0] && previous[1] === id) return
+    draftSession++
+    submitting.value = false
+    activeTab.value = 'basic'
     clearErrors()
     const sub = props.subscription
     if (sub) {
@@ -83,8 +92,8 @@ watch(
         config: {
           cron_schedule: sub.config?.cron_schedule || '',
           auto_test: !!sub.config?.auto_test,
-          rename_rules: sub.config?.rename_rules ? [...sub.config.rename_rules] : [],
-          filter_rules: sub.config?.filter_rules ? [...sub.config.filter_rules] : [],
+          rename_rules: sub.config?.rename_rules?.map((rule) => ({ ...rule })) ?? [],
+          filter_rules: sub.config?.filter_rules?.map((rule) => ({ ...rule })) ?? [],
           target_groups: sub.config?.target_groups ? [...sub.config.target_groups] : [],
           probe_policy: sub.config?.probe_policy
             ? { ...sub.config.probe_policy }
@@ -131,47 +140,22 @@ const isDirty = computed(() => {
   return getDraftSnapshot() !== initialSnapshot.value
 })
 
-let unsavedGuard: ReturnType<typeof useUnsavedChanges> | null = null
-try {
-  unsavedGuard = useUnsavedChanges(
-    isDirty,
-    () => uiText('当前有未保存的订阅源修改，确定要放弃吗？', 'You have unsaved subscription changes. Are you sure you want to discard them?')
-  )
-} catch {
-  // Graceful fallback for routerless unit tests
-}
+const routeRecord = inject(matchedRouteKey, null)
+if (routeRecord?.value) onBeforeRouteLeave(() => !props.modelValue || !busy.value)
 
-function confirmBeforeClose(): boolean {
-  if (isDirty.value) {
-    if (unsavedGuard && typeof unsavedGuard.confirmDiscard === 'function') {
-      const allowed = unsavedGuard.confirmDiscard()
-      if (!allowed) return false
-    } else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-      const allowed = window.confirm(
-        uiText('当前有未保存的订阅源修改，确定要放弃吗？', 'You have unsaved subscription changes. Are you sure you want to discard them?')
-      )
-      if (!allowed) return false
-    }
-    initialSnapshot.value = getDraftSnapshot()
-  }
-  clearErrors()
-  return true
-}
+const unsavedGuard = useUnsavedChanges(
+  isDirty,
+  () => uiText('当前有未保存的订阅源修改，确定要放弃吗？', 'You have unsaved subscription changes. Are you sure you want to discard them?')
+)
 
 function handleClose() {
-  if (confirmBeforeClose()) {
-    emit('update:modelValue', false)
-  }
+  if (busy.value || !unsavedGuard.confirmDiscard()) return
+  clearErrors()
+  emit('update:modelValue', false)
 }
 
 function handleDrawerUpdateModelValue(value: boolean) {
-  if (!value) {
-    if (confirmBeforeClose()) {
-      emit('update:modelValue', false)
-    }
-  } else {
-    emit('update:modelValue', true)
-  }
+  if (!value) handleClose()
 }
 
 function onNameInput() {
@@ -225,32 +209,32 @@ function validate(): boolean {
 
   const trimmedName = draft.value.name.trim()
   if (!trimmedName) {
-    nameError.value = '订阅源名称不能为空'
+    nameError.value = uiText('订阅源名称不能为空', 'Subscription name is required')
     valid = false
   }
 
   const trimmedUrl = draft.value.source_url_secret_ref.trim()
-  if (!trimmedUrl) {
-    urlError.value = '订阅地址不能为空'
+  if (!trimmedUrl && !props.subscription) {
+    urlError.value = uiText('订阅地址不能为空', 'Source URL is required')
     valid = false
   }
 
   const interval = draft.value.refresh_policy.interval_seconds
   if (!interval || interval < 60) {
-    generalError.value = '刷新间隔不能小于 60 秒'
+    generalError.value = uiText('刷新间隔不能小于 60 秒', 'Refresh interval must be at least 60 seconds')
     valid = false
   }
 
   const timeout = draft.value.refresh_policy.timeout_seconds
   if (!timeout || timeout < 5 || timeout > 120) {
-    generalError.value = '超时时间必须在 5 到 120 秒之间'
+    generalError.value = uiText('超时时间必须在 5 到 120 秒之间', 'Timeout must be between 5 and 120 seconds')
     valid = false
   }
 
   if (probePolicyMode.value === 'custom') {
     const pInterval = Number(probeIntervalSeconds.value)
     if (isNaN(pInterval) || pInterval < 60 || pInterval > 604800) {
-      generalError.value = '自定义探测周期必须在 60 到 604800 秒之间'
+      generalError.value = uiText('自定义探测周期必须在 60 到 604800 秒之间', 'Custom probe interval must be between 60 and 604800 seconds')
       valid = false
     }
   }
@@ -258,9 +242,9 @@ function validate(): boolean {
   if (!valid) {
     activeTab.value = 'basic'
     if (!trimmedName) {
-      generalError.value = generalError.value || '请填写订阅源名称'
-    } else if (!trimmedUrl) {
-      generalError.value = generalError.value || '请填写订阅地址'
+      generalError.value = generalError.value || uiText('请填写订阅源名称', 'Enter a subscription name')
+    } else if (!trimmedUrl && !props.subscription) {
+      generalError.value = generalError.value || uiText('请填写订阅地址', 'Enter a source URL')
     }
   }
 
@@ -268,7 +252,7 @@ function validate(): boolean {
 }
 
 function handleSubmit() {
-  if (!validate()) {
+  if (busy.value || !validate()) {
     return
   }
 
@@ -290,8 +274,23 @@ function handleSubmit() {
     }
   }
 
-  initialSnapshot.value = getDraftSnapshot()
-  emit('save', draft.value)
+  // Keep the request separate from the editable draft until persistence is acknowledged.
+  const submitted = JSON.parse(JSON.stringify(draft.value)) as SubscriptionDraft
+  submitted.name = submitted.name.trim()
+  submitted.source_url_secret_ref = submitted.source_url_secret_ref.trim()
+  submitting.value = true
+  const session = draftSession
+  let acknowledged = false
+  emit('save', submitted, (error?: string) => {
+    if (acknowledged || session !== draftSession) return
+    acknowledged = true
+    submitting.value = false
+    if (error) {
+      generalError.value = displayText(error)
+      return
+    }
+    initialSnapshot.value = getDraftSnapshot()
+  })
 }
 </script>
 
@@ -302,7 +301,6 @@ function handleSubmit() {
     :description="t('subscriptions.configDrawerDesc')"
     width-class="max-w-2xl"
     @update:model-value="handleDrawerUpdateModelValue"
-    @close="handleClose"
   >
     <!-- General Error Banner -->
     <div
@@ -314,6 +312,10 @@ function handleSubmit() {
       {{ displayText(generalError) }}
     </div>
 
+    <p v-if="busy" class="text-xs text-base-content/70" role="status">
+      {{ uiText('正在保存，请稍候；输入和关闭已暂时锁定', 'Saving… Editing and closing are temporarily locked') }}
+    </p>
+    <fieldset :disabled="busy" class="min-w-0 space-y-5" :aria-busy="busy ? 'true' : undefined">
     <!-- Progressive Disclosure Tabs -->
     <div class="tabs tabs-box bg-base-300/60 p-1 rounded-xl flex">
       <button
@@ -346,7 +348,7 @@ function handleSubmit() {
           required
           class="input input-sm w-full focus:input-primary font-medium"
           :class="{ 'input-error': nameError }"
-          placeholder="例如：香港专线订阅源"
+          :placeholder="uiText('例如：香港专线订阅源', 'For example: Hong Kong premium')"
           data-testid="subscription-name-input"
           @input="onNameInput"
         />
@@ -376,13 +378,18 @@ function handleSubmit() {
         <input
           id="sub-url-input"
           v-model="draft.source_url_secret_ref"
-          required
+          :required="!subscription"
+          autocomplete="off"
+          spellcheck="false"
           class="input input-sm w-full font-mono text-xs focus:input-primary"
           :class="{ 'input-error': urlError }"
           :placeholder="t('subscriptions.sourceUrlPlaceholder')"
           data-testid="subscription-url-input"
           @input="onUrlInput"
         />
+        <span v-if="subscription" class="text-[11px] text-base-content/60">
+          {{ uiText('留空保留现有订阅来源；只有填写新地址才会替换', 'Leave blank to keep the existing source; enter a new URL only to replace it') }}
+        </span>
         <span v-if="urlError" class="text-error text-[11px]" data-testid="subscription-url-error">
           {{ urlError }}
         </span>
@@ -423,7 +430,7 @@ function handleSubmit() {
           <input v-model="draft.enabled" type="checkbox" class="toggle toggle-primary toggle-sm shrink-0" />
           <div class="flex flex-col">
             <span class="text-xs font-semibold text-base-content">{{ t('subscriptions.enabled') }}</span>
-            <span class="text-[11px] text-base-content/60">将该订阅源纳入节点汇聚与自动同步</span>
+            <span class="text-[11px] text-base-content/60">{{ uiText('将该订阅源纳入节点汇聚与自动同步', 'Include this source in node aggregation and automatic sync') }}</span>
           </div>
         </label>
       </div>
@@ -530,7 +537,7 @@ function handleSubmit() {
         </div>
 
         <div v-if="!draft.config.rename_rules?.length" class="text-xs text-base-content/50 py-2 italic text-center border border-dashed border-base-300 rounded-lg">
-          暂未配置节点正则重命名规则
+          {{ uiText('暂未配置节点正则重命名规则', 'No node rename rules configured') }}
         </div>
         <div v-else class="space-y-2">
           <div
@@ -540,18 +547,21 @@ function handleSubmit() {
           >
             <input
               v-model="rule.pattern"
-              class="input input-xs flex-1 font-mono text-[11px]"
+              class="input input-xs min-w-0 flex-1 font-mono text-[11px]"
+              :aria-label="uiText('重命名匹配正则', 'Rename match pattern')"
               :placeholder="t('subscriptions.pattern')"
             />
             <span class="text-xs text-base-content/50">&rarr;</span>
             <input
               v-model="rule.replace"
-              class="input input-xs flex-1 font-mono text-[11px]"
+              class="input input-xs min-w-0 flex-1 font-mono text-[11px]"
+              :aria-label="uiText('重命名替换文本', 'Rename replacement')"
               :placeholder="t('subscriptions.replace')"
             />
             <button
               type="button"
               class="btn btn-ghost btn-xs btn-circle text-error"
+              :aria-label="uiText('删除重命名规则', 'Remove rename rule')"
               @click="removeRenameRule(idx)"
             >
               <TrashIcon class="w-3.5 h-3.5" />
@@ -568,7 +578,7 @@ function handleSubmit() {
               {{ t('subscriptions.filterRules') }}
             </span>
             <p class="text-[11px] text-base-content/60 mt-0.5">
-              仅通过筛选的节点才会存入节点池并参与探针探测。例如保留加拿大节点：选择 include 并填 <code>加拿大</code>。
+              {{ uiText('仅通过筛选的节点才会存入节点池并参与探测。例如选择 include 并填写 Canada，仅保留匹配的节点', 'Only matching nodes enter inventory and probing. For example, use include with Canada to keep matching nodes') }}
             </p>
           </div>
           <button type="button" class="btn btn-ghost btn-xs gap-1 text-primary shrink-0" @click="addFilterRule">
@@ -577,7 +587,7 @@ function handleSubmit() {
         </div>
 
         <div v-if="!draft.config.filter_rules?.length" class="text-xs text-base-content/50 py-2 italic text-center border border-dashed border-base-300 rounded-lg">
-          暂未配置节点黑白名单过滤规则
+          {{ uiText('暂未配置节点黑白名单过滤规则', 'No node filter rules configured') }}
         </div>
         <div v-else class="space-y-2">
           <div
@@ -585,18 +595,20 @@ function handleSubmit() {
             :key="idx"
             class="flex items-center gap-2 bg-base-200/80 p-2 rounded-lg border border-base-300"
           >
-            <select v-model="rule.type" class="select select-xs text-[11px]">
+            <select v-model="rule.type" class="select select-xs w-24 shrink-0 text-[11px]" :aria-label="uiText('筛选方式', 'Filter mode')">
               <option value="include">{{ t('subscriptions.include') }}</option>
               <option value="exclude">{{ t('subscriptions.exclude') }}</option>
             </select>
             <input
               v-model="rule.pattern"
-              class="input input-xs flex-1 font-mono text-[11px]"
+              class="input input-xs min-w-0 flex-1 font-mono text-[11px]"
+              :aria-label="uiText('筛选匹配正则', 'Filter match pattern')"
               :placeholder="t('subscriptions.pattern')"
             />
             <button
               type="button"
               class="btn btn-ghost btn-xs btn-circle text-error"
+              :aria-label="uiText('删除筛选规则', 'Remove filter rule')"
               @click="removeFilterRule(idx)"
             >
               <TrashIcon class="w-3.5 h-3.5" />
@@ -620,17 +632,19 @@ function handleSubmit() {
       </div>
     </div>
 
+    </fieldset>
+
     <!-- Sticky Footer Slot -->
     <template #footer>
       <div class="flex items-center justify-end gap-2 w-full">
-        <button type="button" class="btn btn-ghost btn-sm touch-manipulation" @click="handleClose">
+        <button type="button" class="btn btn-ghost btn-sm touch-manipulation" :disabled="busy" @click="handleClose">
           {{ t('common.cancel') }}
         </button>
         <button
           type="button"
           class="btn btn-primary btn-sm touch-manipulation shadow-xs"
-          :class="{ loading: saving }"
-          :disabled="saving"
+          :class="{ loading: busy }"
+          :disabled="busy"
           data-testid="subscription-drawer-save-btn"
           @click="handleSubmit"
         >

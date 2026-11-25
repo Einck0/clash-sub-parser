@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
-import { ApiClient, ApiError, setAuthToken, setOnUnauthorized } from './client'
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api, ApiClient, ApiError, setAuthToken, setOnUnauthorized } from './client'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  localStorage.clear()
+  sessionStorage.clear()
+})
 
 describe('ApiClient', () => {
   it('adds a request id and unwraps successful data', async () => {
@@ -207,5 +214,87 @@ describe('ApiClient', () => {
     })
 
     expect(capturedHeaders?.get('X-CSRF-Token')).toBe('custom-csrf-override')
+  })
+
+  it('keeps relative API requests safe when browser storage property access is denied', async () => {
+    const denied = () => { throw new DOMException('Storage is disabled', 'SecurityError') }
+    vi.spyOn(window, 'localStorage', 'get').mockImplementation(denied)
+    vi.spyOn(window, 'sessionStorage', 'get').mockImplementation(denied)
+    expect(api.getAuthToken()).toBeNull()
+    expect(api.getCsrfToken()).toBeNull()
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response('{"data":true}', { status: 200 }))
+    const client = new ApiClient({ fetcher, getAuthToken: denied, getCsrfToken: denied })
+    await expect(client.get('/api/v1/auth/status')).resolves.toBe(true)
+    expect(() => client.setAuthToken('memory-token')).not.toThrow()
+    expect(() => client.setCsrfToken('memory-csrf')).not.toThrow()
+    await client.post('/api/v1/settings', { enabled: true })
+    const headers = new Headers(fetcher.mock.calls[1]?.[1]?.headers)
+    expect(headers.get('Authorization')).toBe('Bearer memory-token')
+    expect(headers.get('X-CSRF-Token')).toBe('memory-csrf')
+    client.setAuthToken(null)
+    client.setCsrfToken(null)
+    expect(client.getAuthToken()).toBeNull()
+    expect(client.getCsrfToken()).toBeNull()
+  })
+
+  it('handles storage methods that throw, not just restricted property getters', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('read denied') })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('write denied') })
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('remove denied') })
+    const client = new ApiClient({ fetcher: vi.fn(), getAuthToken: () => localStorage.getItem('csp_token') })
+    expect(client.getAuthToken()).toBeNull()
+    expect(client.getCsrfToken()).toBeNull()
+    client.setAuthToken('memory-only')
+    client.setCsrfToken('csrf-only')
+    expect(client.getAuthToken()).toBe('memory-only')
+    expect(client.getCsrfToken()).toBe('csrf-only')
+    client.setAuthToken(null)
+    client.setCsrfToken(null)
+    expect(client.getAuthToken()).toBeNull()
+    expect(client.getCsrfToken()).toBeNull()
+  })
+
+  it.each(['replacement', 'clearing', 'new auth operation'] as const)('does not invalidate a new session on an old 401 after %s', async (change) => {
+    let respond!: (response: Response) => void
+    const fetcher = vi.fn(() => new Promise<Response>(resolve => { respond = resolve }))
+    const client = new ApiClient({ fetcher, requestId: () => 'old-request' })
+    client.setAuthToken('old-session')
+    const unauthorized = vi.fn()
+    client.setOnUnauthorized(unauthorized)
+    const pending = client.get('/api/v1/nodes')
+    const rejection = expect(pending).rejects.toMatchObject({ status: 401, requestId: 'old-request', details: { reason: 'expired' } })
+    if (change === 'new auth operation') client.invalidateAuthRequests()
+    else client.setAuthToken(change === 'replacement' ? 'new-session' : null)
+    respond(new Response(JSON.stringify({ error: { code: 'unauthorized', message: 'Expired', details: { reason: 'expired' } }, request_id: 'old-request' }), { status: 401 }))
+    await rejection
+    expect(unauthorized).not.toHaveBeenCalled()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores an old 401 when an external auth getter has moved to another token', async () => {
+    let token = 'first-token'
+    let respond!: (response: Response) => void
+    const client = new ApiClient({
+      getAuthToken: () => token,
+      fetcher: vi.fn(() => new Promise<Response>(resolve => { respond = resolve })),
+    })
+    const unauthorized = vi.fn()
+    client.setOnUnauthorized(unauthorized)
+    const pending = client.get('/api/v1/nodes')
+    const rejection = expect(pending).rejects.toMatchObject({ status: 401 })
+    token = 'replacement-token'
+    respond(new Response(null, { status: 401 }))
+    await rejection
+    expect(unauthorized).not.toHaveBeenCalled()
+  })
+
+  it('never retries an unauthorized mutation automatically', async () => {
+    const fetcher = vi.fn(async () => new Response('{"error":{"code":"unauthorized","message":"Sign in again"}}', { status: 401 }))
+    const client = new ApiClient({ fetcher })
+    const unauthorized = vi.fn()
+    client.setOnUnauthorized(unauthorized)
+    await expect(client.post('/api/v1/subscriptions', { name: 'fixture' })).rejects.toMatchObject({ status: 401, code: 'unauthorized' })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(unauthorized).toHaveBeenCalledTimes(1)
   })
 })

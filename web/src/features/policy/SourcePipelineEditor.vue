@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   PlusIcon,
   TrashIcon,
@@ -34,7 +34,7 @@ import StructuredFilterEditor from './StructuredFilterEditor.vue'
 import { api } from '../../api/client'
 import { uiText } from '../../locales/redesign'
 import { t } from '../../locales'
-import { displayName } from '../../utils/displayNames'
+import { displayName, displayText } from '../../utils/displayNames'
 
 const props = withDefaults(
   defineProps<{
@@ -113,10 +113,14 @@ const nodePageSize = 50
 const nodeTotal = ref(0)
 const internalNodes = ref<Array<{ logicalId: string; displayName: string; active: boolean; protocol?: string }>>([])
 const loadingNodes = ref(false)
+const candidateNodesError = ref('')
+const bulkNodesError = ref('')
+let requestedNodePage = 1
 const knownNodes = ref<Map<string, { logicalId: string; displayName: string; active: boolean; protocol?: string }>>(new Map())
 
 let candidateSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let candidateQuerySeq = 0
+let bulkQuerySeq = 0
 
 function registerKnownNode(n: { logicalId: string; displayName: string; active?: boolean; protocol?: string }) {
   if (n.logicalId) {
@@ -131,7 +135,10 @@ function registerKnownNode(n: { logicalId: string; displayName: string; active?:
 
 async function fetchCandidateNodes(p = 1, search = nodeSearchQuery.value) {
   const seq = ++candidateQuerySeq
+  requestedNodePage = p
   loadingNodes.value = true
+  internalNodes.value = []
+  candidateNodesError.value = ''
   try {
     const params: Record<string, string | number> = {
       page: p,
@@ -150,6 +157,9 @@ async function fetchCandidateNodes(p = 1, search = nodeSearchQuery.value) {
 
     if (seq !== candidateQuerySeq) return
 
+    if (!result || !Array.isArray(result.items)) {
+      throw new Error(uiText('候选节点响应无效，请重试。', 'The candidate node response is invalid. Retry.'))
+    }
     if (result && Array.isArray(result.items)) {
       const mapped = result.items.map((n) => ({
         logicalId: n.logical_id,
@@ -162,8 +172,10 @@ async function fetchCandidateNodes(p = 1, search = nodeSearchQuery.value) {
       nodePage.value = result.page || p
       nodeTotal.value = typeof result.total === 'number' ? result.total : mapped.length
     }
-  } catch {
-    // Graceful fallback
+  } catch (err) {
+    if (seq === candidateQuerySeq) {
+      candidateNodesError.value = displayText(err instanceof Error ? err.message : uiText('读取候选节点失败，请重试。', 'Failed to load candidate nodes. Retry.'))
+    }
   } finally {
     if (seq === candidateQuerySeq) {
       loadingNodes.value = false
@@ -175,6 +187,13 @@ function onNodeSearchInput(e: Event) {
   const target = e.target as HTMLInputElement
   const query = target.value
   nodeSearchQuery.value = query
+  candidateQuerySeq++
+  bulkQuerySeq++
+  loadingAllCandidates.value = false
+  bulkNodesError.value = ''
+  loadingNodes.value = true
+  internalNodes.value = []
+  candidateNodesError.value = ''
   if (candidateSearchDebounceTimer) clearTimeout(candidateSearchDebounceTimer)
   candidateSearchDebounceTimer = setTimeout(() => {
     nodePage.value = 1
@@ -197,9 +216,14 @@ function nextCandidatePage() {
 // Candidate groups cache for group_ref / group_nodes (supports 150+ groups)
 const candidateGroups = ref<PolicyGroup[]>([])
 const loadingCandidateGroups = ref(false)
+const candidateGroupsError = ref('')
+let candidateGroupsSeq = 0
 
 async function fetchCandidateGroups() {
+  const seq = ++candidateGroupsSeq
   loadingCandidateGroups.value = true
+  candidateGroups.value = []
+  candidateGroupsError.value = ''
   try {
     const all: PolicyGroup[] = []
     let p = 1
@@ -212,18 +236,31 @@ async function fetchCandidateGroups() {
       }>('/api/v1/policies/groups', {
         params: { page: p, page_size: ps },
       })
+      if (seq !== candidateGroupsSeq) return
+      if (!Array.isArray(res.items) && !Array.isArray(res.groups)) {
+        throw new Error(uiText('策略组候选响应无效，请重试。', 'The candidate group response is invalid. Retry.'))
+      }
       const items = res.items || res.groups || []
       all.push(...items)
-      if (items.length === 0 || all.length >= (res.total || 0) || items.length < ps) {
+      const total = typeof res.total === 'number' ? res.total : all.length
+      if (all.length >= total || items.length === 0) {
+        if (all.length < total) {
+          throw new Error(uiText('策略组分页结果不完整，请重试。', 'The policy group pages are incomplete. Retry.'))
+        }
         break
+      }
+      if (items.length < ps) {
+        throw new Error(uiText('策略组分页结果不完整，请重试。', 'The policy group pages are incomplete. Retry.'))
       }
       p++
     }
     candidateGroups.value = all
-  } catch {
-    // fallback to props.allGroups
+  } catch (err) {
+    if (seq === candidateGroupsSeq) {
+      candidateGroupsError.value = displayText(err instanceof Error ? err.message : uiText('读取候选策略组失败，请重试。', 'Failed to load candidate groups. Retry.'))
+    }
   } finally {
-    loadingCandidateGroups.value = false
+    if (seq === candidateGroupsSeq) loadingCandidateGroups.value = false
   }
 }
 
@@ -252,29 +289,10 @@ watch(
   { deep: true }
 )
 
-const activeNodes = computed(() => {
-  if (internalNodes.value.length > 0) {
-    return internalNodes.value
-  }
-  const source = props.availableNodes && props.availableNodes.length > 0 ? props.availableNodes : []
-  const mapped = source
-    .map((n) => ({
-      logicalId: ('logicalId' in n ? n.logicalId : undefined) || ('logical_id' in n ? n.logical_id : undefined) || '',
-      displayName: ('displayName' in n ? n.displayName : undefined) || ('display_name' in n ? n.display_name : undefined) || '',
-      protocol: n.protocol,
-      active: n.active !== false,
-    }))
-    .filter((n) => n.logicalId.length > 0)
-
-  mapped.forEach(registerKnownNode)
-  const activeOnly = mapped.filter((n) => n.active)
-  return activeOnly.length > 0 ? activeOnly : mapped
-})
+const activeNodes = computed(() => internalNodes.value)
 
 const availableChildGroups = computed(() => {
-  const pool = candidateGroups.value.length > 0
-    ? candidateGroups.value
-    : (props.allGroups || [])
+  const pool = candidateGroups.value
   return pool.filter((g) => g.id !== props.groupId)
 })
 
@@ -365,11 +383,14 @@ function selectAllCurrentPageNodes() {
 // Select all filtered across pages
 const loadingAllCandidates = ref(false)
 async function selectAllFilteredNodes() {
-  if (loadingAllCandidates.value || loadingNodes.value) return
+  if (loadingAllCandidates.value || loadingNodes.value || candidateNodesError.value) return
   loadingAllCandidates.value = true
-  const seq = ++candidateQuerySeq
+  bulkNodesError.value = ''
+  const seq = ++bulkQuerySeq
+  const query = nodeSearchQuery.value.trim()
   try {
     const allNodes: Array<{ logicalId: string; displayName: string }> = []
+    let expectedTotal = 0
     let p = 1
     const ps = 100
     while (true) {
@@ -379,31 +400,35 @@ async function selectAllFilteredNodes() {
         scope: 'enabled_subscriptions',
         active_only: 'true',
       }
-      if (nodeSearchQuery.value && nodeSearchQuery.value.trim()) {
-        params.search = nodeSearchQuery.value.trim()
+      if (query) {
+        params.search = query
       }
       const res = await api.get<{
         items?: Array<{ logical_id: string; display_name: string; active?: boolean; protocol?: string }>
         total?: number
       }>('/api/v1/nodes', { params })
 
-      if (seq !== candidateQuerySeq) return
-
+      if (seq !== bulkQuerySeq) return
       if (res && Array.isArray(res.items)) {
         res.items.forEach((n) => {
           registerKnownNode({ logicalId: n.logical_id, displayName: displayName(n.display_name, '未命名节点', n.logical_id), active: n.active !== false, protocol: n.protocol })
           allNodes.push({ logicalId: n.logical_id, displayName: displayName(n.display_name, '未命名节点', n.logical_id) })
         })
-        if (res.items.length === 0 || allNodes.length >= (res.total || 0) || res.items.length < ps) {
-          break
+        expectedTotal = typeof res.total === 'number' ? res.total : allNodes.length
+        if (allNodes.length >= expectedTotal) break
+        if (res.items.length < ps) {
+          throw new Error(uiText('候选节点分页结果不完整，未添加任何节点。请重试。', 'Candidate node pages are incomplete. No nodes were added; retry.'))
         }
       } else {
-        break
+        throw new Error(uiText('候选节点响应无效，未添加任何节点。请重试。', 'The candidate node response is invalid. No nodes were added; retry.'))
       }
       p++
     }
 
-    if (seq !== candidateQuerySeq) return
+    if (seq !== bulkQuerySeq) return
+    if (allNodes.length !== expectedTotal) {
+      throw new Error(uiText('候选节点分页结果不完整，未添加任何节点。请重试。', 'Candidate node pages are incomplete. No nodes were added; retry.'))
+    }
 
     for (const node of allNodes) {
       emit('add-source', {
@@ -413,10 +438,12 @@ async function selectAllFilteredNodes() {
         node_logical_id: node.logicalId,
       })
     }
-  } catch {
-    // fallback
+  } catch (err) {
+    if (seq === bulkQuerySeq) {
+      bulkNodesError.value = displayText(err instanceof Error ? err.message : uiText('读取全部匹配节点失败，未添加任何节点。请重试。', 'Failed to load all matching nodes. No nodes were added; retry.'))
+    }
   } finally {
-    if (seq === candidateQuerySeq) {
+    if (seq === bulkQuerySeq) {
       loadingAllCandidates.value = false
     }
   }
@@ -465,6 +492,13 @@ function onDrop(idx: number, e: DragEvent) {
 }
 
 const computedSemantics = computed(() => computeSourceSemantics(props.sources))
+
+onUnmounted(() => {
+  candidateQuerySeq++
+  candidateGroupsSeq++
+  bulkQuerySeq++
+  if (candidateSearchDebounceTimer) clearTimeout(candidateSearchDebounceTimer)
+})
 
 onMounted(() => {
   fetchCandidateNodes(1, '')
@@ -768,7 +802,7 @@ onMounted(() => {
                   type="button"
                   data-testid="candidate-prev-page"
                   class="btn btn-ghost btn-xs"
-                  :disabled="loadingNodes || nodePage <= 1"
+                  :disabled="loadingNodes || !!candidateNodesError || nodePage <= 1"
                   @click="prevCandidatePage"
                 >
                   <ChevronLeftIcon class="w-3.5 h-3.5" />
@@ -778,7 +812,7 @@ onMounted(() => {
                   type="button"
                   data-testid="candidate-next-page"
                   class="btn btn-ghost btn-xs"
-                  :disabled="loadingNodes || nodePage * nodePageSize >= nodeTotal"
+                  :disabled="loadingNodes || !!candidateNodesError || nodePage * nodePageSize >= nodeTotal"
                   @click="nextCandidatePage"
                 >
                   <ChevronRightIcon class="w-3.5 h-3.5" />
@@ -786,14 +820,27 @@ onMounted(() => {
               </div>
             </div>
 
+            <div v-if="candidateNodesError" role="alert" data-testid="candidate-node-error" class="rounded-lg border border-error/30 bg-error/10 p-2 text-error flex flex-wrap items-start gap-2">
+              <span class="min-w-0 flex-1 whitespace-pre-wrap break-words">{{ candidateNodesError }}</span>
+              <button type="button" class="btn btn-xs btn-outline shrink-0" data-testid="candidate-node-retry" @click="fetchCandidateNodes(requestedNodePage)">
+                {{ uiText('重试', 'Retry') }}
+              </button>
+            </div>
+            <div v-if="bulkNodesError" role="alert" data-testid="candidate-bulk-error" class="rounded-lg border border-error/30 bg-error/10 p-2 text-error flex flex-wrap items-start gap-2">
+              <span class="min-w-0 flex-1 whitespace-pre-wrap break-words">{{ bulkNodesError }} {{ uiText('未添加任何节点。', 'No nodes were added.') }}</span>
+              <button type="button" class="btn btn-xs btn-outline shrink-0" :disabled="loadingAllCandidates || loadingNodes || !!candidateNodesError" @click="selectAllFilteredNodes">
+                {{ uiText('重试全选', 'Retry select all') }}
+              </button>
+            </div>
             <div class="flex gap-2">
               <select
                 v-model="newEdgeTarget"
-                class="select select-sm flex-1 text-xs font-mono"
+                class="select select-sm flex-1 min-w-0 text-xs font-mono"
                 data-testid="edge-node-select"
+                :disabled="loadingNodes || !!candidateNodesError"
               >
                 <option disabled value="">
-                  {{ loadingNodes ? '加载候选节点中...' : (activeNodes.length ? '请选择活跃节点...' : '暂无匹配候选节点') }}
+                  {{ loadingNodes ? uiText('加载候选节点中...', 'Loading candidate nodes...') : candidateNodesError ? uiText('候选节点读取失败，请重试', 'Candidate node read failed; retry') : (activeNodes.length ? uiText('请选择活跃节点...', 'Select an active node...') : uiText('暂无匹配候选节点', 'No matching candidate nodes')) }}
                 </option>
                 <option
                   v-if="newEdgeTarget && !activeNodes.some((n) => n.logicalId === newEdgeTarget)"
@@ -838,7 +885,7 @@ onMounted(() => {
                 <button
                   type="button"
                   class="btn btn-ghost btn-xs"
-                  :disabled="activeNodes.length === 0"
+                  :disabled="loadingNodes || !!candidateNodesError || activeNodes.length === 0"
                   @click="selectAllCurrentPageNodes"
                 >
                   全选当页 ({{ activeNodes.length }})
@@ -846,7 +893,8 @@ onMounted(() => {
                 <button
                   type="button"
                   class="btn btn-ghost btn-xs"
-                  :disabled="loadingAllCandidates || nodeTotal === 0"
+                  data-testid="candidate-select-all"
+                  :disabled="loadingAllCandidates || loadingNodes || !!candidateNodesError || nodeTotal === 0"
                   @click="selectAllFilteredNodes"
                 >
                   {{ loadingAllCandidates ? '正在全选...' : `全选过滤结果 (${nodeTotal})` }}
@@ -904,14 +952,21 @@ onMounted(() => {
             <div v-else-if="topologyStatus === 'error'" class="text-xs text-error py-1" data-testid="topology-ref-error">
               策略组拓扑未就绪，禁止选择或添加新组引用
             </div>
+            <div v-if="loadingCandidateGroups" role="status" class="text-info">{{ uiText('正在加载候选策略组...', 'Loading candidate groups...') }}</div>
+            <div v-else-if="candidateGroupsError" role="alert" data-testid="candidate-group-error" class="rounded-lg border border-error/30 bg-error/10 p-2 text-error flex flex-wrap items-start gap-2">
+              <span class="min-w-0 flex-1 whitespace-pre-wrap break-words">{{ candidateGroupsError }}</span>
+              <button type="button" class="btn btn-xs btn-outline shrink-0" data-testid="candidate-group-retry" @click="fetchCandidateGroups">
+                {{ uiText('重试', 'Retry') }}
+              </button>
+            </div>
             <div class="flex gap-2">
               <select
                 v-model="newEdgeTarget"
-                class="select select-sm flex-1 text-xs font-mono"
+                class="select select-sm flex-1 min-w-0 text-xs font-mono"
                 data-testid="edge-group-select"
-                :disabled="topologyStatus !== 'ready'"
+                :disabled="topologyStatus !== 'ready' || loadingCandidateGroups || !!candidateGroupsError"
               >
-                <option disabled value="">{{ topologyStatus === 'error' ? '拓扑加载失败，无法选择' : (topologyStatus !== 'ready' ? '策略组拓扑未就绪，请等待...' : '请选择目标策略组...') }}</option>
+                <option disabled value="">{{ candidateGroupsError ? uiText('候选策略组读取失败，请重试', 'Candidate group read failed; retry') : topologyStatus === 'error' ? '拓扑加载失败，无法选择' : (topologyStatus !== 'ready' || loadingCandidateGroups ? '策略组拓扑未就绪，请等待...' : '请选择目标策略组...') }}</option>
                 <option
                   v-for="cg in availableChildGroups"
                   :key="cg.id"
@@ -924,7 +979,7 @@ onMounted(() => {
                 type="button"
                 class="btn btn-primary btn-sm gap-1 shrink-0"
                 data-testid="add-edge-btn"
-                :disabled="!newEdgeTarget.trim() || topologyStatus !== 'ready'"
+                :disabled="!newEdgeTarget.trim() || topologyStatus !== 'ready' || loadingCandidateGroups || !!candidateGroupsError"
                 @click="handleAddSourceItem"
               >
                 <PlusIcon class="w-4 h-4" />

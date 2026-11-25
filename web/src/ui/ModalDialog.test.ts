@@ -37,6 +37,29 @@ describe('ModalDialog Component', () => {
     vi.restoreAllMocks()
   })
 
+  it('assigns independent labels to multiple dialog instances and emits one close request', async () => {
+    const state = reactive({ first: true, second: true })
+    const updates = vi.fn((value: boolean) => { state.first = value })
+    app = createApp({ render: () => [
+      h(ModalDialog, { modelValue: state.first, title: 'First', description: 'First details', 'onUpdate:modelValue': updates }),
+      h(ModalDialog, { modelValue: state.second, title: 'Second', description: 'Second details' }),
+    ] })
+    app.mount(container)
+    await nextTick()
+    const dialogs = [...container.querySelectorAll('dialog')]
+    expect(new Set(dialogs.map((dialog) => dialog.getAttribute('aria-labelledby'))).size).toBe(2)
+    expect(new Set(dialogs.map((dialog) => dialog.getAttribute('aria-describedby'))).size).toBe(2)
+    for (const [index, dialog] of dialogs.entries()) {
+      expect(document.getElementById(dialog.getAttribute('aria-labelledby')!)?.textContent).toBe(index === 0 ? 'First' : 'Second')
+    }
+    dialogs[0]!.querySelector<HTMLButtonElement>('[data-testid="modal-dialog-close"]')!.click()
+    await nextTick()
+    await nextTick()
+    expect(updates).toHaveBeenCalledOnce()
+    expect(dialogs[0]!.open).toBe(false)
+    expect(dialogs[1]!.open).toBe(true)
+  })
+
   it('renders title, description and scrollable content flex column structure', async () => {
     const propsState = reactive({
       modelValue: true,
@@ -85,7 +108,7 @@ describe('ModalDialog Component', () => {
     const footerBtn = container.querySelector('#modal-footer-btn')
     expect(footerBtn).toBeTruthy()
 
-    const closeBtn = container.querySelector('button[aria-label="Close dialog"]') as HTMLButtonElement
+    const closeBtn = container.querySelector('button[data-testid="modal-dialog-close"]') as HTMLButtonElement
     expect(closeBtn).toBeTruthy()
     closeBtn.click()
     await nextTick()

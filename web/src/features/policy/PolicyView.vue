@@ -10,9 +10,9 @@ import {
   ArrowPathIcon,
   MagnifyingGlassIcon,
 } from '@heroicons/vue/24/outline'
+import { api } from '../../api/client'
 import { usePolicy } from './usePolicy'
 import type {
-  FilterCondition,
   MemberSource,
   GroupType,
   PolicyGroup,
@@ -20,10 +20,11 @@ import type {
 import {
   ALL_GROUP_TYPES,
   MODERN_RULE_CAPABILITY_MATRIX,
+  normalizeGroupSources,
 } from './policyTypes'
 import GroupCard from './GroupCard.vue'
 import PolicyEditorSheet from './PolicyEditorSheet.vue'
-import StructuredFilterEditor from './StructuredFilterEditor.vue'
+import GlobalNodeFilterSettings from '../settings/GlobalNodeFilterSettings.vue'
 import ConfirmModal from '../../ui/ConfirmModal.vue'
 import ModalDialog from '../../ui/ModalDialog.vue'
 import ErrorStateCard from '../../ui/ErrorStateCard.vue'
@@ -38,7 +39,6 @@ const {
   globalFilter,
   loading,
   saving,
-  savingGlobalFilter,
   validating,
   validationResult,
   validationState,
@@ -63,7 +63,6 @@ const {
   deleteGroup,
   validateGraph,
   loadGlobalFilter,
-  updateGlobalFilter,
 } = usePolicy()
 
 const hasWarningOrErrorIssues = computed(() => {
@@ -107,25 +106,23 @@ async function handleRetryTopology() {
   }
 }
 
-// Global Filter Modal State
+// Reuse the settings editor so the quick-access path has the same persistence and draft safety.
 const globalFilterModalOpen = ref(false)
-const globalConditions = ref<FilterCondition[]>([])
-const globalConditionError = ref('')
+const globalFilterEditor = ref<{ dirty: boolean; busy: boolean } | null>(null)
 
 function openGlobalFilterModal() {
-  globalConditions.value = (globalFilter.value?.spec?.conditions || []).map((c) => ({ ...c }))
-  globalConditionError.value = ''
   globalFilterModalOpen.value = true
 }
 
-async function saveGlobalFilter() {
-  try {
-    await updateGlobalFilter({ conditions: globalConditions.value })
-    await reload()
-    globalFilterModalOpen.value = false
-  } catch (err: any) {
-    globalConditionError.value = displayText(err?.message || '保存全局筛选失败')
-  }
+function closeGlobalFilterModal() {
+  if (globalFilterEditor.value?.busy) return
+  if (globalFilterEditor.value?.dirty && !window.confirm(uiText('放弃未保存的全局筛选修改？', 'Discard unsaved global filter changes?'))) return
+  globalFilterModalOpen.value = false
+}
+
+async function globalFilterSaved() {
+  globalFilterModalOpen.value = false
+  await reload()
 }
 
 // Group / Edges Sheet State
@@ -133,7 +130,8 @@ const sheetOpen = ref(false)
 const sheetMode = ref<'group' | 'edges'>('group')
 const activeGroup = ref<PolicyGroup | null>(null)
 const selectedGroupId = ref<string | null>(null)
-const conflictData = ref<{ currentRevision: number; message: string } | null>(null)
+const conflictData = ref<{ currentRevision: number | null; message: string } | null>(null)
+const reloadingGroup = ref(false)
 const cycleData = ref<{ cyclePath: string[]; message: string } | null>(null)
 const sheetServerError = ref<string | null>(null)
 
@@ -182,14 +180,29 @@ function openManageEdges(group: PolicyGroup) {
 }
 
 async function handleReloadGroup(groupId: string) {
-  await loadGroups(page.value, pageSize.value)
-  const found = groups.value.find((g) => g.id === groupId)
-  if (found) {
-    activeGroup.value = found
-  }
-  conflictData.value = null
-  cycleData.value = null
+  if (reloadingGroup.value || saving.value) return
+  reloadingGroup.value = true
   sheetServerError.value = null
+  try {
+    const latest = await api.get<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(groupId)}`)
+    if (latest.id !== groupId || !Number.isInteger(latest.revision) || (latest.revision ?? 0) < 1) {
+      throw new Error(uiText('读取的策略组版本无效，草稿已保留，请重试。', 'The returned group revision is invalid. Your draft is preserved; retry.'))
+    }
+    if (!sheetOpen.value || activeGroup.value?.id !== groupId) return
+    conflictData.value = null
+    cycleData.value = null
+    sheetServerError.value = null
+    const normalized = { ...latest, sources: normalizeGroupSources(latest) }
+    groups.value = groups.value.map(group => group.id === groupId ? normalized : group)
+    allTopologyGroups.value = allTopologyGroups.value.map(group => group.id === groupId ? normalized : group)
+    activeGroup.value = normalized
+  } catch (err) {
+    if (sheetOpen.value && activeGroup.value?.id === groupId) {
+      sheetServerError.value = displayText(err instanceof Error ? err.message : uiText('重新读取策略组失败，草稿已保留。', 'Failed to reload the group. Your draft is preserved.'))
+    }
+  } finally {
+    reloadingGroup.value = false
+  }
 }
 
 async function handleSaveGroup(data: {
@@ -230,9 +243,10 @@ async function handleSaveGroup(data: {
     sheetOpen.value = false
   } catch (err: any) {
     if (err?.status === 409 || err?.code === 'revision_conflict') {
-      const rev = (err.details as any)?.current_revision ?? (err as any).current_revision ?? ((activeGroup.value?.revision || 1) + 1)
+      const rawRevision = err.details?.current_revision ?? err.current_revision
+      const revision = typeof rawRevision === 'number' && Number.isInteger(rawRevision) && rawRevision > 0 ? rawRevision : null
       conflictData.value = {
-        currentRevision: rev,
+        currentRevision: revision,
         message: displayText(err.message || '策略组版本冲突，服务端已更新。'),
       }
     } else if (err?.status === 422 && ((err.details as any)?.cycle_path || err?.code === 'cycle_detected')) {
@@ -363,7 +377,7 @@ onUnmounted(() => {
           <ExclamationTriangleIcon class="w-5 h-5 shrink-0" />
           <div class="min-w-0">
             <span class="font-bold">{{ t('policy.validationIncomplete') }}</span>
-            <p class="opacity-80 mt-0.5 truncate">
+            <p class="opacity-80 mt-0.5 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
               {{ displayText(validationError) || uiText('校验服务请求失败 (网络/服务异常)，非策略无效，请点击右侧重试', 'Validation request failed (network/service error), draft is not invalid. Please retry.') }}
             </p>
           </div>
@@ -513,7 +527,7 @@ onUnmounted(() => {
     >
       <div class="flex items-center gap-2 min-w-0">
         <ExclamationTriangleIcon class="w-5 h-5 text-warning shrink-0" />
-        <span class="text-xs">
+        <span class="min-w-0 text-xs whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
           {{ displayText(topologyError) || '全量策略组拓扑加载失败' }}
           {{ isTopologyStale ? '（当前显示为过期拓扑缓存，请重试以恢复组引用修改与保存）' : '（拓扑未就绪，禁止保存策略组来源）' }}
         </span>
@@ -620,43 +634,14 @@ onUnmounted(() => {
 
     <!-- Global Filter Modal Dialog -->
     <ModalDialog
-      v-model="globalFilterModalOpen"
-      title="全局节点筛选"
-      description="在策略组来源流水线之前评估软筛选；被排除的节点默认不进入继承全局过滤的策略组，关闭继承的策略组（如 WARP 或专用免检线路）享有软豁免并直接匹配全部候选节点(不应用全局筛选)。"
+      :model-value="globalFilterModalOpen"
+      :title="t('policy.globalFilter')"
+      @update:model-value="closeGlobalFilterModal"
     >
-      <div class="space-y-4">
-        <div class="p-3 bg-info/10 border border-info/30 rounded-xl text-xs text-info leading-relaxed">
-          <p><strong>执行优先级：</strong>节点停用与显式风险排除 → 全局节点软筛选 → 策略组有序来源流水线（逐项加入 / 排除，后续可重新加入）。</p>
-          <p class="mt-1">留空筛选条件时将允许所有符合启用状态与风险限制的候选节点，不做额外全局过滤。</p>
-          <p class="mt-1 opacity-80">{{ t('settings.filterExplanation') }}</p>
-          <p class="mt-1 opacity-80">说明：全局软筛选在直接导出与预览时即时生效；WARP 或专用免检线路等策略组可关闭「继承全局筛选」以软豁免并使用全部候选节点(不应用全局筛选)。当前凭据版本门槛、节点停用、来源订阅禁用与显式风险排除始终保留生效，不可绕过。</p>
-        </div>
-
-        <p v-if="globalConditionError" role="alert" class="text-error text-xs" data-testid="filter-request-error">
-          {{ displayText(globalConditionError) }}
-        </p>
-
-        <StructuredFilterEditor
-          v-model="globalConditions"
-          :max-conditions="32"
-          :allow-clear="true"
-        />
-
-        <div class="modal-action border-t border-base-300 pt-3">
-          <button type="button" class="btn btn-ghost btn-sm" @click="globalFilterModalOpen = false">
-            取消
-          </button>
-          <button
-            type="button"
-            class="btn btn-primary btn-sm gap-2"
-            :class="{ loading: savingGlobalFilter }"
-            :disabled="savingGlobalFilter"
-            @click="saveGlobalFilter"
-          >
-            保存全局筛选
-          </button>
-        </div>
-      </div>
+      <GlobalNodeFilterSettings v-if="globalFilterModalOpen" ref="globalFilterEditor" @saved="globalFilterSaved" />
+      <template #footer>
+        <button type="button" class="btn btn-ghost btn-sm" :disabled="globalFilterEditor?.busy" @click="closeGlobalFilterModal">{{ t('common.close') }}</button>
+      </template>
     </ModalDialog>
 
     <!-- Policy Group / Edges Bottom Sheet -->
@@ -667,6 +652,7 @@ onUnmounted(() => {
       :available-nodes="nodeItems"
       :mode="sheetMode"
       :saving="saving"
+      :reloading="reloadingGroup"
       :conflict-error="conflictData"
       :cycle-error="cycleData"
       :server-error="sheetServerError"

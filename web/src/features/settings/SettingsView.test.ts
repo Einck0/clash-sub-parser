@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
 import SettingsView from './SettingsView.vue'
 import App from '../../App.vue'
-import { api } from '../../api/client'
+import { api, ApiClient } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { setLocale } from '../../locales'
 import { router } from '../../router'
@@ -13,13 +13,27 @@ describe('SettingsView Component', () => {
   let container: HTMLDivElement
   let app: ReturnType<typeof createApp> | null = null
 
-  beforeEach(() => {
+  async function navigate(action: () => void) {
+    const completed = new Promise<void>(resolve => {
+      const remove = router.afterEach(() => { remove(); resolve() })
+    })
+    action()
+    await completed
+    await nextTick()
+  }
+
+  beforeEach(async () => {
     container = document.createElement('div')
     document.body.appendChild(container)
     localStorage.clear()
     toastStore.clear()
     setLocale('zh-CN')
     vi.restoreAllMocks()
+    const client = new ApiClient({ getAuthToken: () => window.localStorage.getItem('csp_token') })
+    vi.spyOn(api, 'getAuthToken').mockImplementation(() => client.getAuthToken())
+    vi.spyOn(api, 'setAuthToken').mockImplementation(token => client.setAuthToken(token))
+    vi.spyOn(api, 'setCsrfToken').mockImplementation(token => client.setCsrfToken(token))
+    await router.replace('/settings')
   })
 
   afterEach(() => {
@@ -154,8 +168,7 @@ describe('SettingsView Component', () => {
       path === '/api/v1/settings/auth' ? settings() : { mode: 'protected', authenticated: true, subject: 'admin' }
     )
     vi.spyOn(api, 'put').mockResolvedValue(settings())
-    const setAuthTokenSpy = vi.fn()
-    ;(api as any).setAuthToken = setAuthTokenSpy
+    const setAuthTokenSpy = vi.mocked(api.setAuthToken)
 
     const { getTokenInput, getSaveTokenBtn, getStoredTokenDisplay } = mountSettings()
     await nextTick()
@@ -232,8 +245,7 @@ describe('SettingsView Component', () => {
       path === '/api/v1/settings/auth' ? settings() : { mode: 'open', authenticated: true, subject: 'admin' }
     )
     vi.spyOn(api, 'put').mockResolvedValue(settings(true, true, false))
-    const setAuthTokenSpy = vi.fn()
-    ;(api as any).setAuthToken = setAuthTokenSpy
+    const setAuthTokenSpy = vi.mocked(api.setAuthToken)
 
     const { getClearTokenBtn, getStoredTokenDisplay } = mountSettings()
     await nextTick()
@@ -373,9 +385,8 @@ describe('SettingsView Component', () => {
 
     const probeTab = container.querySelector(
       '[data-testid="settings-tab-probe"]'
-    ) as HTMLButtonElement
-    probeTab.click()
-    await nextTick()
+    ) as HTMLAnchorElement
+    await navigate(() => probeTab.click())
 
     const panelConnection = container.querySelector('[data-testid="settings-panel-connection"]') as HTMLElement
     const panelProbe = container.querySelector('[data-testid="settings-panel-probe"]') as HTMLElement
@@ -387,8 +398,7 @@ describe('SettingsView Component', () => {
       '[data-testid="settings-category-select"]'
     ) as HTMLSelectElement
     mobileSelect.value = 'filter'
-    mobileSelect.dispatchEvent(new Event('change'))
-    await nextTick()
+    await navigate(() => mobileSelect.dispatchEvent(new Event('change')))
 
     const panelFilter = container.querySelector('[data-testid="settings-panel-filter"]') as HTMLElement
     expect(panelProbe.style.display).toBe('none')
@@ -397,9 +407,8 @@ describe('SettingsView Component', () => {
     // Switch via tab to 'security'
     const securityTab = container.querySelector(
       '[data-testid="settings-tab-security"]'
-    ) as HTMLButtonElement
-    securityTab.click()
-    await nextTick()
+    ) as HTMLAnchorElement
+    await navigate(() => securityTab.click())
 
     const panelSecurity = container.querySelector('[data-testid="settings-panel-security"]') as HTMLElement
     expect(panelFilter.style.display).toBe('none')
@@ -417,9 +426,8 @@ describe('SettingsView Component', () => {
     // Switch to security tab first
     const securityTab = container.querySelector(
       '[data-testid="settings-tab-security"]'
-    ) as HTMLButtonElement
-    securityTab.click()
-    await nextTick()
+    ) as HTMLAnchorElement
+    await navigate(() => securityTab.click())
 
     const tokenInput = getTokenInput()
     tokenInput.value = 'my-unsaved-draft-token-999'
@@ -429,13 +437,11 @@ describe('SettingsView Component', () => {
     // Switch category away to display
     const displayTab = container.querySelector(
       '[data-testid="settings-tab-display"]'
-    ) as HTMLButtonElement
-    displayTab.click()
-    await nextTick()
+    ) as HTMLAnchorElement
+    await navigate(() => displayTab.click())
 
     // Switch category back to security
-    securityTab.click()
-    await nextTick()
+    await navigate(() => securityTab.click())
 
     // Draft input is completely preserved
     expect(getTokenInput().value).toBe('my-unsaved-draft-token-999')

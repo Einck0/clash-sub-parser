@@ -15,7 +15,7 @@ withDefaults(
 
 <template>
   <div
-    class="flex flex-wrap items-center justify-between gap-3 min-w-0 w-full"
+    class="csp-page-toolbar flex flex-wrap items-start justify-between gap-3 min-w-0 w-full"
     data-testid="page-toolbar"
   >
     <!-- Left: Optional Title / Description (non-redundant heading) -->
@@ -23,14 +23,14 @@ withDefaults(
       <h1 v-if="srOnlyTitle && title" class="sr-only">{{ title }}</h1>
       <h2
         v-else-if="title"
-        class="text-base sm:text-lg font-semibold tracking-tight text-base-content truncate"
+        class="text-lg sm:text-xl font-semibold tracking-tight text-base-content break-words [overflow-wrap:anywhere]"
         data-testid="toolbar-title"
       >
         {{ title }}
       </h2>
       <p
         v-if="description"
-        class="text-xs text-base-content/60 truncate mt-0.5"
+        class="csp-page-description text-sm mt-1"
         data-testid="toolbar-description"
       >
         {{ description }}
@@ -49,7 +49,7 @@ withDefaults(
     <!-- Right: Page actions -->
     <div
       v-if="$slots.actions"
-      class="flex items-center gap-2 shrink-0 ml-auto"
+      class="flex flex-wrap items-center gap-2 max-w-full ml-auto"
       data-testid="toolbar-actions"
     >
       <slot name="actions" />

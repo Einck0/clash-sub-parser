@@ -13,7 +13,8 @@ import {
 } from '@heroicons/vue/24/outline'
 import Popover from '../../ui/Popover.vue'
 import { t, currentLocale } from '../../locales'
-import { displayText } from '../../utils/displayNames'
+import { uiText } from '../../locales/redesign'
+import { displayName, displayText } from '../../utils/displayNames'
 import {
   formatRefreshTime,
   formatFullDateTime,
@@ -54,18 +55,18 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
       <div class="flex flex-wrap items-start justify-between gap-2 min-w-0" data-testid="subscription-card-header">
         <div class="min-w-0 flex-1 basis-full sm:basis-40">
           <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
-            <h3 class="truncate font-semibold text-sm sm:text-base text-base-content">{{ subscription.name }}</h3>
+            <h3 class="truncate font-semibold text-sm sm:text-base text-base-content">{{ displayName(subscription.name, uiText('未命名订阅', 'Unnamed subscription'), subscription.id) }}</h3>
             <span
               v-if="subscription.is_primary"
               class="badge badge-warning badge-sm font-semibold shrink-0 gap-1 text-[11px]"
               data-testid="primary-sub-badge"
-              title="当前主力订阅，流量与过期时间将透传至客户端"
+              :title="uiText('当前主力订阅，流量与过期时间将透传至客户端', 'Primary subscription: forwards traffic and expiry details to clients')"
             >
               <StarIcon class="h-3 w-3 fill-current" />
-              主订阅
+              {{ uiText('主订阅', 'Primary') }}
             </span>
           </div>
-          <p class="mt-1 truncate text-xs opacity-60 break-all">订阅来源已配置</p>
+          <p class="mt-1 truncate text-xs opacity-60 break-all">{{ uiText('订阅来源已配置', 'Source configured') }}</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">
@@ -75,11 +76,11 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
             class="btn btn-ghost btn-xs border border-base-300/80 px-2 gap-1 touch-manipulation hover:bg-base-300 rounded-lg"
             data-testid="subscription-card-refresh-btn"
             :disabled="refreshing"
-            :title="refreshing ? t('subscriptions.refreshing') : t('common.refresh')"
+            :title="refreshing ? t('subscriptions.refreshing') : uiText('从订阅来源拉取新内容', 'Fetch new content from this source')"
             @click="emit('refresh', subscription)"
           >
             <ArrowPathIcon class="h-3.5 w-3.5" :class="{ 'animate-spin': refreshing }" />
-            <span>{{ refreshing ? t('subscriptions.refreshing') : t('common.refresh') }}</span>
+            <span>{{ refreshing ? t('subscriptions.refreshing') : uiText('拉取来源', 'Fetch source') }}</span>
           </button>
 
           <!-- View Entries Button -->
@@ -101,7 +102,7 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
             class="btn btn-xs gap-1 touch-manipulation transition-all rounded-lg"
             :class="subscription.enabled ? 'btn-success btn-outline' : 'btn-ghost text-base-content/60 border border-base-300'"
             :disabled="toggling"
-            :title="subscription.enabled ? '点击停用订阅源' : '点击启用订阅源'"
+            :title="subscription.enabled ? uiText('点击停用订阅源', 'Disable subscription') : uiText('点击启用订阅源', 'Enable subscription')"
             @click="emit('toggle', subscription)"
           >
             <span
@@ -113,34 +114,41 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
 
           <!-- More Actions Popover -->
           <Popover placement="bottom-end" panel-class="w-44 max-w-[calc(100vw-2rem)]">
-            <template #trigger="{ open }">
+            <template #trigger="{ open, panelId }">
               <button
                 type="button"
                 data-testid="subscription-actions-trigger"
                 class="btn btn-ghost btn-xs btn-square border border-base-300/80 touch-manipulation rounded-lg"
                 :class="{ 'bg-base-300': open }"
                 :aria-label="t('common.moreActions')"
+                aria-haspopup="menu"
+                :aria-expanded="open"
+                :aria-controls="panelId"
               >
                 <EllipsisVerticalIcon class="h-4 w-4" />
               </button>
             </template>
             <template #default="{ close }">
-              <ul class="menu menu-xs p-1 text-xs gap-0.5">
+              <ul role="none" class="menu menu-xs p-1 text-xs gap-0.5">
                 <li>
                   <button
                     type="button"
+                    role="menuitem"
+                    tabindex="-1"
                     data-testid="sub-action-refresh"
                     class="touch-manipulation py-1.5"
                     :disabled="refreshing"
                     @click="close(); emit('refresh', subscription)"
                   >
                     <ArrowPathIcon class="h-3.5 w-3.5" :class="{ 'animate-spin': refreshing }" />
-                    <span>{{ refreshing ? t('subscriptions.refreshing') : t('common.refresh') }}</span>
+                    <span>{{ refreshing ? t('subscriptions.refreshing') : uiText('拉取来源', 'Fetch source') }}</span>
                   </button>
                 </li>
                 <li>
                   <button
                     type="button"
+                    role="menuitem"
+                    tabindex="-1"
                     data-testid="sub-action-edit"
                     class="touch-manipulation py-1.5"
                     @click="close(); emit('edit', subscription)"
@@ -152,18 +160,22 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
                 <li>
                   <button
                     type="button"
+                    role="menuitem"
+                    tabindex="-1"
                     data-testid="sub-action-primary"
                     class="touch-manipulation py-1.5"
                     :disabled="subscription.is_primary || settingPrimary"
                     @click="close(); emit('set-primary', subscription)"
                   >
                     <StarIcon class="h-3.5 w-3.5" :class="{ 'fill-current text-warning': subscription.is_primary }" />
-                    <span>{{ subscription.is_primary ? '当前主订阅' : '设为主订阅' }}</span>
+                    <span>{{ subscription.is_primary ? uiText('当前主订阅', 'Current primary') : uiText('设为主订阅', 'Set as primary') }}</span>
                   </button>
                 </li>
                 <li>
                   <button
                     type="button"
+                    role="menuitem"
+                    tabindex="-1"
                     data-testid="sub-action-copy"
                     class="touch-manipulation py-1.5"
                     @click="close(); emit('copy', subscription)"
@@ -175,6 +187,8 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
                 <li>
                   <button
                     type="button"
+                    role="menuitem"
+                    tabindex="-1"
                     data-testid="sub-action-delete"
                     class="text-error touch-manipulation py-1.5"
                     @click="close(); emit('confirm-remove', subscription)"
@@ -227,11 +241,11 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
         class="rounded-xl border border-base-300/80 bg-base-100/70 p-2.5 text-xs space-y-1.5"
       >
         <div class="flex items-center justify-between font-medium text-[11px] opacity-75">
-          <span>流量与周期</span>
+          <span>{{ uiText('流量与周期', 'Traffic and expiry') }}</span>
           <span v-if="parsedUserinfo.expireDate" class="font-mono">
-            到期: {{ parsedUserinfo.expireDate }}
+            {{ uiText('到期', 'Expires') }}: {{ parsedUserinfo.expireDate }}
           </span>
-          <span v-else class="opacity-50">长期有效</span>
+          <span v-else class="opacity-50">{{ uiText('未提供到期时间', 'No expiry provided') }}</span>
         </div>
         <div v-if="parsedUserinfo.total > 0" class="space-y-1">
           <progress
@@ -240,9 +254,9 @@ const parsedUserinfo = computed(() => parseUserInfo(props.subscription.userinfo)
             :max="parsedUserinfo.total"
           />
           <div class="flex justify-between text-[11px] font-mono opacity-70">
-            <span>已用: {{ formatBytes(parsedUserinfo.used) }}</span>
-            <span>总计: {{ formatBytes(parsedUserinfo.total) }}</span>
-            <span>剩余: {{ formatBytes(parsedUserinfo.remaining) }}</span>
+            <span>{{ uiText('已用', 'Used') }}: {{ formatBytes(parsedUserinfo.used) }}</span>
+            <span>{{ uiText('总计', 'Total') }}: {{ formatBytes(parsedUserinfo.total) }}</span>
+            <span>{{ uiText('剩余', 'Remaining') }}: {{ formatBytes(parsedUserinfo.remaining) }}</span>
           </div>
         </div>
       </div>

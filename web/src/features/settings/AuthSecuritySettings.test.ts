@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
 import AuthSecuritySettings from './AuthSecuritySettings.vue'
 import { useAuthSettings } from './useAuthSettings'
-import { api } from '../../api/client'
+import { api, ApiClient } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { setLocale } from '../../locales'
 
@@ -18,6 +18,10 @@ describe('AuthSecuritySettings Component', () => {
     toastStore.clear()
     setLocale('zh-CN')
     vi.restoreAllMocks()
+    const client = new ApiClient({ getAuthToken: () => window.localStorage.getItem('csp_token') })
+    vi.spyOn(api, 'getAuthToken').mockImplementation(() => client.getAuthToken())
+    vi.spyOn(api, 'setAuthToken').mockImplementation(token => client.setAuthToken(token))
+    vi.spyOn(api, 'setCsrfToken').mockImplementation(token => client.setCsrfToken(token))
   })
 
   afterEach(() => {
@@ -210,10 +214,8 @@ describe('AuthSecuritySettings Component', () => {
   it('rotates token, invalidates cookies/CSRF, updates bearer header, and clears input draft', async () => {
     vi.spyOn(api, 'get').mockResolvedValue(settingsResponse(true, true, true))
     vi.spyOn(api, 'put').mockResolvedValue(settingsResponse(true, true, true))
-    const setAuthTokenSpy = vi.fn()
-    const setCsrfTokenSpy = vi.fn()
-    ;(api as any).setAuthToken = setAuthTokenSpy
-    ;(api as any).setCsrfToken = setCsrfTokenSpy
+    const setAuthTokenSpy = vi.mocked(api.setAuthToken)
+    const setCsrfTokenSpy = vi.mocked(api.setCsrfToken)
 
     const { auth, getTokenInput, getSaveTokenBtn, getStoredTokenDisplay } = mountAuthSettings()
     await auth.probeAuthMode()
@@ -247,8 +249,7 @@ describe('AuthSecuritySettings Component', () => {
     localStorage.setItem('csp_token', 'token-to-be-cleared')
     vi.spyOn(api, 'get').mockResolvedValue(settingsResponse(true, true, true))
     vi.spyOn(api, 'put').mockResolvedValue(settingsResponse(true, true, false))
-    const setAuthTokenSpy = vi.fn()
-    ;(api as any).setAuthToken = setAuthTokenSpy
+    const setAuthTokenSpy = vi.mocked(api.setAuthToken)
     vi.spyOn(window, 'confirm').mockReturnValue(true)
 
     const { auth, getClearTokenBtn, getStoredTokenDisplay } = mountAuthSettings()

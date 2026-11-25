@@ -287,6 +287,7 @@ export function useChainDraft(options: UseChainDraftOptions) {
   }
 
   async function save(): Promise<boolean> {
+    if (saving.value) return false
     saveError.value = null
     conflictState.value = null
 

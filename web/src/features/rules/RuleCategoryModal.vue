@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import {
   PlusIcon,
   TrashIcon,
@@ -15,15 +15,20 @@ import type {
   UpdateCategoryPayload,
 } from './rulesTypes'
 import { t } from '../../locales'
+import { uiText } from '../../locales/redesign'
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 
 const props = defineProps<{
   modelValue: boolean
   categories: RuleCategory[]
   saving: boolean
+  blocked?: boolean
+  error?: string
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [open: boolean]
+  'retry': []
   'create-category': [payload: CreateCategoryPayload]
   'update-category': [id: string, payload: UpdateCategoryPayload]
   'delete-category': [category: RuleCategory]
@@ -35,11 +40,14 @@ const newCatName = ref('')
 const newCatSortOrder = ref(100)
 
 function handleCreate() {
-  if (!newCatName.value.trim()) return
+  if (props.saving || props.blocked || !newCatName.value.trim()) return
   emit('create-category', {
     name: newCatName.value.trim(),
     sort_order: Number(newCatSortOrder.value) || 100,
   })
+}
+
+function createSucceeded() {
   newCatName.value = ''
   newCatSortOrder.value = (props.categories[props.categories.length - 1]?.sort_order ?? 100) + 10
 }
@@ -58,11 +66,13 @@ function openEditCategory(cat: RuleCategory) {
 }
 
 function saveEditCategory() {
-  if (!editingCategory.value || !editCatName.value.trim()) return
+  if (props.saving || props.blocked || !editingCategory.value || !editCatName.value.trim()) return
   emit('update-category', editingCategory.value.id, {
     name: editCatName.value.trim(),
     sort_order: Number(editCatSortOrder.value) || 0,
   })
+}
+function updateSucceeded() {
   editCategoryDialogOpen.value = false
   editingCategory.value = null
 }
@@ -77,11 +87,27 @@ function confirmDeleteCategory(cat: RuleCategory) {
 }
 
 function executeDeleteCategory() {
-  if (!categoryToDelete.value) return
+  if (props.saving || props.blocked || !categoryToDelete.value) return
   emit('delete-category', categoryToDelete.value)
+}
+function deleteSucceeded() {
   deleteCatConfirmOpen.value = false
   categoryToDelete.value = null
 }
+const dirty = computed(() => props.modelValue && Boolean(newCatName.value.trim() || (editingCategory.value &&
+  (editCatName.value !== editingCategory.value.name || editCatSortOrder.value !== editingCategory.value.sort_order))))
+const { confirmDiscard } = useUnsavedChanges(dirty, () => uiText('放弃未保存的分类修改？', 'Discard unsaved category changes?'))
+function closeEdit() {
+  if (props.saving || !confirmDiscard()) return
+  updateSucceeded()
+}
+function close() {
+  if (props.saving || !confirmDiscard()) return
+  createSucceeded()
+  updateSucceeded()
+  emit('update:modelValue', false)
+}
+defineExpose({ createSucceeded, updateSucceeded, deleteSucceeded })
 </script>
 
 <template>
@@ -91,9 +117,13 @@ function executeDeleteCategory() {
       :model-value="modelValue"
       :title="t('rules.categoryModalTitle')"
       :description="t('rules.categoryModalDesc')"
-      @update:model-value="$emit('update:modelValue', $event)"
+      @update:model-value="close"
     >
-      <div class="space-y-4">
+      <div v-if="error" role="alert" class="alert alert-error text-xs flex flex-wrap gap-2 mb-3">
+        <span class="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ error }}</span>
+        <button v-if="blocked" type="button" class="btn btn-xs btn-outline" :disabled="saving" @click="$emit('retry')">{{ t('common.retry') }}</button>
+      </div>
+      <fieldset class="space-y-4 min-w-0" :disabled="saving || blocked">
         <!-- New Category Input Form -->
         <div class="flex flex-col sm:flex-row gap-2 p-3 rounded-lg bg-base-200/50 border border-base-300/40">
           <label for="new-category-name" class="sr-only">{{ t('rules.categoryNamePlaceholder') }}</label>
@@ -171,14 +201,14 @@ function executeDeleteCategory() {
             </div>
           </div>
         </div>
-      </div>
+      </fieldset>
 
       <template #footer>
         <div class="flex justify-end w-full">
           <button
             type="button"
             class="btn btn-sm btn-ghost"
-            @click="$emit('update:modelValue', false)"
+            @click="close"
           >
             {{ t('common.close') }}
           </button>
@@ -188,10 +218,13 @@ function executeDeleteCategory() {
 
     <!-- Edit Category Sub-Dialog -->
     <ModalDialog
-      v-model="editCategoryDialogOpen"
+      :model-value="editCategoryDialogOpen"
+      @update:model-value="closeEdit"
       :title="t('rules.editCategory')"
     >
       <form class="space-y-3.5" @submit.prevent="saveEditCategory">
+        <p v-if="error" role="alert" class="alert alert-error text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{ error }}</p>
+        <fieldset :disabled="saving || blocked" class="space-y-3.5 min-w-0">
         <div class="space-y-1.5">
           <label for="edit-category-name" class="block text-xs font-semibold text-base-content/80">
             {{ t('rules.categoryName') }}
@@ -217,6 +250,7 @@ function executeDeleteCategory() {
           />
           <p class="text-[11px] text-base-content/60 mt-1">{{ t('rules.categorySortOrderHint') }}</p>
         </div>
+        </fieldset>
       </form>
 
       <template #footer>
@@ -224,14 +258,14 @@ function executeDeleteCategory() {
           <button
             type="button"
             class="btn btn-sm btn-ghost"
-            @click="editCategoryDialogOpen = false"
+            @click="closeEdit"
           >
             {{ t('common.cancel') }}
           </button>
           <button
             type="button"
             class="btn btn-sm btn-primary"
-            :disabled="saving"
+            :disabled="saving || blocked"
             @click="saveEditCategory"
           >
             {{ t('common.save') }}
@@ -249,6 +283,8 @@ function executeDeleteCategory() {
       :loading="saving"
       @confirm="executeDeleteCategory"
       @cancel="deleteCatConfirmOpen = false"
-    />
+    >
+      <p v-if="error" role="alert" class="alert alert-error text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{ error }}</p>
+    </ConfirmModal>
   </div>
 </template>

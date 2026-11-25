@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, h, nextTick } from 'vue'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createApp, h, nextTick, ref } from 'vue'
+import { setLocale } from '../../locales'
 import AuthGate from './AuthGate.vue'
 import * as useAuthModule from './useAuth'
 
@@ -10,12 +11,13 @@ describe('AuthGate component', () => {
 
   const mockLogin = vi.fn()
   const mockClearStoredToken = vi.fn()
-  const mockErrorMessage = { value: '' }
+  const mockErrorMessage = ref('')
 
   beforeEach(() => {
+    vi.restoreAllMocks()
+    setLocale('zh-CN')
     container = document.createElement('div')
     document.body.appendChild(container)
-    vi.restoreAllMocks()
 
     mockLogin.mockReset()
     mockClearStoredToken.mockReset()
@@ -49,6 +51,13 @@ describe('AuthGate component', () => {
       getError: () => container.querySelector('[data-testid=\"auth-gate-error\"]'),
     }
   }
+
+  afterEach(() => {
+    app?.unmount()
+    app = null
+    container.remove()
+    vi.restoreAllMocks()
+  })
 
   it('renders auth gate form elements properly', () => {
     const { getGate, getInput, getSubmitBtn, getResetBtn } = mountComponent()
@@ -101,5 +110,62 @@ describe('AuthGate component', () => {
     await nextTick()
 
     expect(mockClearStoredToken).toHaveBeenCalledTimes(1)
+  })
+
+  it('updates human-readable labels and privacy controls when the locale changes', async () => {
+    const { getGate, getInput, getToggleBtn, getResetBtn } = mountComponent()
+    expect(getGate()?.textContent).toContain('登录控制台')
+    setLocale('en-US')
+    await nextTick()
+    expect(getGate()?.textContent).toContain('Sign in to the console')
+    expect(getInput().placeholder).toBe('Enter your administrator token')
+    expect(getToggleBtn().getAttribute('aria-label')).toBe('Show token')
+    getToggleBtn().click()
+    await nextTick()
+    expect(getToggleBtn().getAttribute('aria-label')).toBe('Hide token')
+    expect(getToggleBtn().getAttribute('aria-pressed')).toBe('true')
+    expect(getResetBtn().textContent).toContain('Clear token on this device')
+  })
+
+  it('prevents duplicate login and reset while pending, hides the token, and clears it after success', async () => {
+    let finish!: (success: boolean) => void
+    mockLogin.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve }))
+    const { getInput, getToggleBtn, getSubmitBtn, getResetBtn } = mountComponent()
+    getInput().value = 'fixture-admin-token'
+    getInput().dispatchEvent(new Event('input'))
+    getToggleBtn().click()
+    await nextTick()
+    getSubmitBtn().click()
+    await nextTick()
+    expect(getInput().disabled).toBe(true)
+    expect(getInput().type).toBe('password')
+    expect(getToggleBtn().disabled).toBe(true)
+    expect(getSubmitBtn().disabled).toBe(true)
+    expect(getResetBtn().disabled).toBe(true)
+    container.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }))
+    getResetBtn().click()
+    expect(mockLogin).toHaveBeenCalledTimes(1)
+    expect(mockClearStoredToken).not.toHaveBeenCalled()
+    finish(true)
+    await Promise.resolve()
+    await nextTick()
+    expect(getInput().value).toBe('')
+    expect(getSubmitBtn().disabled).toBe(false)
+  })
+
+  it('keeps a failed login retryable and associates full errors with the input', async () => {
+    mockLogin.mockResolvedValue(false)
+    const { getInput, getSubmitBtn, getError } = mountComponent()
+    getInput().value = 'wrong-fixture-token'
+    getInput().dispatchEvent(new Event('input'))
+    getSubmitBtn().click()
+    await Promise.resolve()
+    mockErrorMessage.value = `Please retry: ${'server-unavailable-'.repeat(30)}`
+    await nextTick()
+    expect(getInput().value).toBe('wrong-fixture-token')
+    expect(getSubmitBtn().disabled).toBe(false)
+    expect(getInput().getAttribute('aria-invalid')).toBe('true')
+    expect(getInput().getAttribute('aria-describedby')).toBe(getError()?.id)
+    expect(getError()?.textContent).toContain(mockErrorMessage.value)
   })
 })

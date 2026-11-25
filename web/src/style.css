@@ -45,6 +45,9 @@ html, body {
   --app-viewport-available-h: calc(100dvh - var(--app-safe-top) - var(--app-safe-bottom));
   --surface-max-h: calc(100dvh - var(--app-safe-top) - 1rem);
   --dialog-max-h: calc(100dvh - var(--app-safe-top) - var(--app-safe-bottom) - 2rem);
+  --csp-surface-muted: color-mix(in oklch, var(--color-base-200) 65%, var(--color-base-100));
+  --csp-border: color-mix(in oklch, var(--color-base-content) 14%, transparent);
+  --csp-text-muted: color-mix(in oklch, var(--color-base-content) 76%, var(--color-base-100));
 }
 
 /* Fluid overlay surface utility ensuring header/body/actions flex layout */
@@ -75,6 +78,76 @@ textarea:focus-visible,
 [role="button"]:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+/* Shared workspace surfaces follow the selected DaisyUI palette. */
+.csp-app {
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.csp-sidebar, .csp-mobile-dock {
+  background: var(--csp-surface-muted);
+  border-color: var(--csp-border);
+}
+
+.csp-topbar {
+  border-color: var(--csp-border);
+}
+
+.csp-nav-link[aria-current="page"] {
+  color: var(--color-base-content);
+  background: color-mix(in oklch, var(--color-primary) 13%, var(--csp-surface-muted));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-primary) 24%, transparent);
+}
+
+.csp-nav-link[aria-current="page"] svg { color: var(--color-primary); }
+.csp-main { scroll-margin-top: 5rem; }
+.csp-main:focus { outline: none; }
+
+.csp-page-toolbar {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--csp-border);
+}
+
+.csp-page-description {
+  max-width: 72ch;
+  color: var(--csp-text-muted);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.csp-empty-state {
+  background: var(--csp-surface-muted);
+  border: 1px solid var(--csp-border);
+  border-radius: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.csp-overlay { overflow-wrap: anywhere; }
+.csp-overlay :is(input, textarea) { caret-color: var(--color-primary); }
+.csp-toast-stack { width: min(24rem, calc(100vw - 2rem)); }
+
+.csp-skip-link {
+  position: fixed;
+  top: max(.75rem, var(--app-safe-top));
+  left: .75rem;
+  z-index: 100;
+  padding: .75rem 1rem;
+  border-radius: .75rem;
+  color: var(--color-primary-content);
+  background: var(--color-primary);
+  transform: translateY(calc(-100% - 2rem));
+}
+.csp-skip-link:focus { transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .csp-app *, .csp-overlay *, .csp-toast-stack * {
+    scroll-behavior: auto !important;
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 /* Form controls retain semantic size with ergonomic tap target feel */

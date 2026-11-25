@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import {
   ExclamationTriangleIcon,
   ExclamationCircleIcon,
   InformationCircleIcon,
 } from '@heroicons/vue/24/outline'
-import { t } from '../locales'
+import { t, uiText } from '../locales'
 
 interface Props {
   modelValue?: boolean
@@ -42,10 +42,13 @@ const displayMessage = computed(() => props.message || props.description || '')
 const displayConfirmText = computed(() => props.confirmText || t('common.confirm'))
 const displayCancelText = computed(() => props.cancelText || t('common.cancel'))
 const dialog = ref<HTMLDialogElement>()
+const id = useId()
+const titleId = `confirm-modal-title-${id}`
+const descriptionId = `confirm-modal-description-${id}`
 let previousActiveElement: HTMLElement | null = null
 
 function restoreFocus() {
-  if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
+  if (previousActiveElement?.isConnected) {
     previousActiveElement.focus()
     previousActiveElement = null
   }
@@ -53,7 +56,7 @@ function restoreFocus() {
 
 async function syncDialog(open: boolean) {
   await nextTick()
-  if (!dialog.value) return
+  if (!dialog.value || open !== props.modelValue) return
   if (open) {
     if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
       previousActiveElement = document.activeElement
@@ -66,9 +69,10 @@ async function syncDialog(open: boolean) {
 }
 watch(() => props.modelValue, syncDialog)
 onMounted(() => syncDialog(props.modelValue))
+onUnmounted(restoreFocus)
 
 function handleNativeClose() {
-  if (props.modelValue) handleCancel()
+  if (!dialog.value?.open && props.modelValue) handleCancel()
 }
 function handleNativeCancel(event: Event) {
   event.preventDefault()
@@ -99,21 +103,21 @@ function handleBackdrop(event: MouseEvent) {
     ref="dialog"
     class="modal modal-middle bg-base-900/60 backdrop-blur-sm"
     aria-modal="true"
-    aria-labelledby="confirm-modal-title"
-    aria-describedby="confirm-modal-description"
+    :aria-labelledby="titleId"
+    :aria-describedby="displayMessage ? descriptionId : undefined"
     @click="handleBackdrop"
     @cancel="handleNativeCancel"
     @close="handleNativeClose"
   >
     <div
-      class="modal-box relative max-w-md w-[calc(100%-2rem)] adaptive-surface-dialog flex flex-col bg-base-100 text-base-content shadow-2xl border border-base-300 p-5 md:p-6 overflow-hidden"
+      class="csp-overlay modal-box relative max-w-md w-[calc(100%-2rem)] adaptive-surface-dialog flex flex-col bg-base-100 text-base-content shadow-2xl border border-base-300 p-5 md:p-6 overflow-hidden"
     >
       <button
         v-if="closable"
         type="button"
         class="btn btn-ghost btn-sm btn-circle absolute right-4 top-4 z-10 text-base-content/60 hover:text-base-content"
         data-testid="confirm-modal-close"
-        aria-label="Close dialog"
+        :aria-label="uiText('关闭对话框', 'Close dialog')"
         :disabled="loading"
         @click="handleCancel"
       >✕</button>
@@ -136,7 +140,7 @@ function handleBackdrop(event: MouseEvent) {
 
           <div class="min-w-0 flex-1 pr-8">
             <h2
-              id="confirm-modal-title"
+              :id="titleId"
               class="text-base sm:text-lg font-bold tracking-tight text-base-content break-words"
               data-testid="confirm-modal-title"
             >
@@ -144,7 +148,7 @@ function handleBackdrop(event: MouseEvent) {
             </h2>
             <p
               v-if="displayMessage"
-              id="confirm-modal-description"
+              :id="descriptionId"
               class="text-xs sm:text-sm text-base-content/70 mt-1 leading-relaxed break-words"
               data-testid="confirm-modal-message"
             >

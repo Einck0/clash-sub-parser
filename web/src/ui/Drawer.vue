@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, useId, watch, onMounted, onUnmounted } from 'vue'
 import { drawerStack, openDrawer, removeDrawer } from './drawerStack'
 import { XMarkIcon } from '@heroicons/vue/24/outline'
+import { uiText } from '../locales'
 import { useBodyScrollLock } from '../composables/useBodyScrollLock'
 
 const props = withDefaults(
@@ -59,6 +60,7 @@ function handleKeydown(e: KeyboardEvent) {
     e.stopPropagation()
     close()
   } else if (e.key === 'Tab') {
+    if (document.activeElement instanceof HTMLElement && document.activeElement.closest('[data-popover-panel]')) return
     const focusable = Array.from(panelRef.value.querySelectorAll<HTMLElement>(
       'a[href], button, input, select, textarea, [tabindex]'
     )).filter((element) => element.tabIndex >= 0 && !element.matches(':disabled') &&
@@ -127,7 +129,7 @@ watch(
         ref="panelRef"
         data-drawer-panel
         :inert="!isTopmost"
-        class="relative z-10 flex flex-col w-full bg-base-100/95 text-base-content backdrop-blur-2xl shadow-2xl border-t md:border-t-0 md:border-l border-white/10 rounded-t-3xl md:rounded-l-3xl md:rounded-tr-none md:fixed md:inset-y-0 md:right-0 adaptive-surface-sheet md:max-h-full overflow-hidden transition-all duration-300"
+        class="csp-overlay relative z-10 flex flex-col w-full bg-base-100/95 text-base-content backdrop-blur-2xl shadow-2xl border-t md:border-t-0 md:border-l border-white/10 rounded-t-3xl md:rounded-l-3xl md:rounded-tr-none md:fixed md:inset-y-0 md:right-0 adaptive-surface-sheet md:max-h-full overflow-hidden transition-all duration-300"
         :class="widthClass"
         role="dialog"
         :aria-modal="isTopmost ? 'true' : undefined"
@@ -153,7 +155,8 @@ watch(
             ref="closeBtnRef"
             type="button"
             class="btn btn-ghost btn-circle btn-sm shrink-0 sticky top-0 touch-manipulation hover:bg-base-300/50"
-            aria-label="Close drawer"
+            data-testid="drawer-close"
+            :aria-label="uiText('关闭面板', 'Close drawer')"
             @click="close"
           >
             <XMarkIcon class="w-5 h-5" />

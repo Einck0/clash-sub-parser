@@ -49,7 +49,8 @@ onMounted(() => {
         <button
           type="button"
           class="btn btn-ghost btn-sm gap-1.5 touch-manipulation hover:bg-base-300/60"
-          :disabled="isRefreshingStats"
+          :disabled="isRefreshingStats || refreshingHealth"
+          :aria-busy="isRefreshingStats || refreshingHealth"
           data-testid="refresh-all-btn"
           @click="refreshAll"
         >
@@ -62,7 +63,9 @@ onMounted(() => {
       </template>
     </PageToolbar>
 
-    <!-- Compact Health & Status Telemetry Card -->
+    <MetricSummary :metrics="metrics" @navigate="navigateTo" />
+
+    <!-- Service reachability is deliberately separate from inventory and probe history. -->
     <div
       class="p-3.5 sm:p-4 rounded-xl bg-base-200/60 border border-base-content/10 shadow-sm flex flex-wrap items-center justify-between gap-3 min-w-0"
       data-testid="health-telemetry-card"
@@ -80,7 +83,7 @@ onMounted(() => {
         />
         <div class="min-w-0">
           <div class="flex items-center gap-2">
-            <h3 class="text-xs sm:text-sm font-semibold text-base-content truncate">
+            <h3 class="text-xs sm:text-sm font-semibold text-base-content break-words">
               {{ t('dashboard.healthTitle') }}
             </h3>
             <!-- Real Latency in ms: no <10ms fallback! -->
@@ -90,7 +93,7 @@ onMounted(() => {
               data-testid="health-latency"
             >{{ healthLatency }}ms</span>
           </div>
-          <p class="text-xs text-base-content/60 truncate" data-testid="health-status-desc">
+          <p class="text-xs text-base-content/60 break-words" data-testid="health-status-desc" aria-live="polite">
             {{
               healthStatus === 'healthy'
                 ? uiText('核心后端服务在线响应正常', 'Core backend service reachable')
@@ -129,10 +132,6 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Quick Actions: prioritized next actions directly below status -->
     <QuickActions @navigate="navigateTo" />
-
-    <!-- Metrics Summary Grid -->
-    <MetricSummary :metrics="metrics" @navigate="navigateTo" />
   </div>
 </template>

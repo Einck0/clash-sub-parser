@@ -21,6 +21,32 @@ export const PUBLICATION_STORAGE_PREFIX = 'csp_publication_active_'
 export const PUBLICATION_LATEST_KEY = 'csp_publication_latest'
 
 export const publicationSession = ref(0)
+let publicationClearPending = false
+
+function browserStorage(kind: 'localStorage' | 'sessionStorage'): Storage | undefined {
+  // The browser property getter itself can reject access before any Storage method runs.
+  try {
+    return typeof window !== 'undefined' ? window[kind] : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function flushPublicationClear(storage: Storage): boolean {
+  if (!publicationClearPending) return true
+  try {
+    storage.removeItem(PUBLICATION_LATEST_KEY)
+    for (let i = storage.length - 1; i >= 0; i--) {
+      const key = storage.key(i)
+      if (key?.startsWith(PUBLICATION_STORAGE_PREFIX)) storage.removeItem(key)
+    }
+    publicationClearPending = false
+    return true
+  } catch {
+    // Never restore an old capability if logout could not finish deleting its cache.
+    return false
+  }
+}
 
 export function clearPublicationCapabilities(): void {
   clearStoredPublication()
@@ -52,14 +78,10 @@ export function getDirectSubscriptionUrl(
 
   const path = pathMap[target] || `/${target}`
 
-  const token =
-    options?.token !== undefined
-      ? options.token
-      : typeof window !== 'undefined' && window.localStorage
-      ? window.localStorage.getItem('csp_token') || ''
-      : ''
-
-  const isProtected = options?.mode ? options.mode === 'protected' : Boolean(token)
+  const token = options?.token !== undefined ? options.token : api.getAuthToken() || ''
+  // An unreadable or absent browser token is not evidence that exports are public.
+  const isProtected = options?.mode !== 'open'
+  if (isProtected && !token) return ''
 
   let fullUrl = origin ? `${origin}${path}` : path
   if (isProtected && token) {
@@ -171,7 +193,7 @@ export function buildValidatedSubscriptionUrl(
 }
 
 export function getStoredTarget(
-  storage: Storage | undefined = typeof window !== 'undefined' ? window.localStorage : undefined
+  storage: Storage | undefined = browserStorage('localStorage')
 ): CompilerTarget {
   if (!storage) return DEFAULT_COMPILER_TARGET
   try {
@@ -184,7 +206,7 @@ export function getStoredTarget(
 
 export function setStoredTarget(
   target: CompilerTarget,
-  storage: Storage | undefined = typeof window !== 'undefined' ? window.localStorage : undefined
+  storage: Storage | undefined = browserStorage('localStorage')
 ): boolean {
   if (!storage || !isValidCompilerTarget(target)) {
     return false
@@ -199,9 +221,9 @@ export function setStoredTarget(
 
 export function getStoredPublication(
   target?: CompilerTarget,
-  storage: Storage | undefined = typeof window !== 'undefined' ? window.sessionStorage : undefined
+  storage: Storage | undefined = browserStorage('sessionStorage')
 ): PublicationDetail | null {
-  if (!storage) return null
+  if (!storage || !flushPublicationClear(storage)) return null
   try {
     const key = target ? `${PUBLICATION_STORAGE_PREFIX}${target}` : PUBLICATION_LATEST_KEY
     let raw = storage.getItem(key)
@@ -229,9 +251,9 @@ export function getStoredPublication(
 
 export function setStoredPublication(
   pub: PublicationDetail,
-  storage: Storage | undefined = typeof window !== 'undefined' ? window.sessionStorage : undefined
+  storage: Storage | undefined = browserStorage('sessionStorage')
 ): boolean {
-  if (!storage || !pub || !pub.id) return false
+  if (!storage || !pub || !pub.id || !flushPublicationClear(storage)) return false
   try {
     const serialized = JSON.stringify(pub)
     storage.setItem(PUBLICATION_LATEST_KEY, serialized)
@@ -246,21 +268,16 @@ export function setStoredPublication(
 
 export function clearStoredPublication(
   target?: CompilerTarget,
-  storage: Storage | undefined = typeof window !== 'undefined' ? window.sessionStorage : undefined
+  storage: Storage | undefined = browserStorage('sessionStorage')
 ): void {
-  if (!storage) return
+  if (!target) publicationClearPending = true
+  if (!storage || !flushPublicationClear(storage)) return
   try {
     if (target) {
       storage.removeItem(`${PUBLICATION_STORAGE_PREFIX}${target}`)
       const latest = storage.getItem(PUBLICATION_LATEST_KEY)
       if (latest && JSON.parse(latest)?.target === target) {
         storage.removeItem(PUBLICATION_LATEST_KEY)
-      }
-    } else {
-      storage.removeItem(PUBLICATION_LATEST_KEY)
-      for (let i = storage.length - 1; i >= 0; i--) {
-        const key = storage.key(i)
-        if (key?.startsWith(PUBLICATION_STORAGE_PREFIX)) storage.removeItem(key)
       }
     }
   } catch {}
@@ -275,9 +292,6 @@ export function usePublications(initialTarget?: CompilerTarget) {
   const selectedTarget = ref<CompilerTarget>(resolvedInitial)
   const preview = ref<PreviewResult | null>(null)
   const activePublication = ref<PublicationDetail | null>(getStoredPublication(resolvedInitial))
-  watch(publicationSession, () => {
-    activePublication.value = null
-  }, { flush: 'sync' })
   const loadingPreview = ref(false)
   const publishing = ref(false)
   const revoking = ref(false)
@@ -420,6 +434,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
   ): Promise<PreviewResult | null> {
     const request = ++previewRequest
     const session = publicationSession.value
+    preview.value = null
     loadingPreview.value = true
     error.value = ''
     errorDetail.value = null
@@ -612,8 +627,9 @@ export function usePublications(initialTarget?: CompilerTarget) {
         textarea.style.opacity = '0'
         document.body.appendChild(textarea)
         textarea.select()
-        document.execCommand('copy')
+        const copied = document.execCommand('copy')
         document.body.removeChild(textarea)
+        if (!copied) return false
       }
       copied.value = true
       setTimeout(() => {
@@ -626,18 +642,17 @@ export function usePublications(initialTarget?: CompilerTarget) {
   }
 
   function downloadFile(filename: string, content: string, contentType: string) {
+    const blob = new Blob([content], { type: contentType || 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
     try {
-      const blob = new Blob([content], { type: contentType || 'text/plain' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
       a.href = url
       a.download = filename
       document.body.appendChild(a)
       a.click()
-      document.body.removeChild(a)
+    } finally {
+      a.remove()
       URL.revokeObjectURL(url)
-    } catch {
-      // fallback
     }
   }
 
@@ -672,6 +687,12 @@ export function usePublications(initialTarget?: CompilerTarget) {
   })
 
   const copiedTarget = ref<CompilerTarget | null>(null)
+  watch(publicationSession, () => {
+    activePublication.value = null
+    manualCopyUrl.value = ''
+    manualCopyModalOpen.value = false
+    copiedTarget.value = null
+  }, { flush: 'sync' })
 
   function getDirectUrl(
     target: CompilerTarget,
@@ -684,7 +705,9 @@ export function usePublications(initialTarget?: CompilerTarget) {
     target: CompilerTarget,
     options?: { origin?: string; token?: string; mode?: 'open' | 'protected' }
   ): Promise<{ url: string; copied: boolean }> {
+    const session = publicationSession.value
     const url = getDirectUrl(target, options)
+    if (!url) return { url: '', copied: false }
     let clipOk = false
 
     if (
@@ -700,6 +723,7 @@ export function usePublications(initialTarget?: CompilerTarget) {
       }
     }
 
+    if (session !== publicationSession.value) return { url: '', copied: false }
     if (clipOk) {
       copiedTarget.value = target
       if (typeof window !== 'undefined') {
@@ -741,17 +765,13 @@ export function usePublications(initialTarget?: CompilerTarget) {
     downloadingTargets.value[target] = true
     try {
       const url = getDirectUrl(target, options)
+      if (!url) throw new Error('A protected export link requires an available token')
       const filename = getTargetFilename(target)
 
       const headers: Record<string, string> = {
         Accept: '*/*',
       }
-      const token =
-        options?.token !== undefined
-          ? options.token
-          : typeof window !== 'undefined' && window.localStorage
-          ? window.localStorage.getItem('csp_token') || ''
-          : ''
+      const token = options?.token !== undefined ? options.token : api.getAuthToken() || ''
       if (token && !headers.Authorization) {
         headers.Authorization = `Bearer ${token}`
       }

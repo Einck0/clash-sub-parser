@@ -3,285 +3,151 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createApp, nextTick, type App as VueApp } from 'vue'
 import App from './App.vue'
 import { router } from './router'
-import { i18n } from './locales'
+import { i18n, setLocale } from './locales'
 import { api } from './api/client'
 
-describe('App.vue Navigation Dock & Layout Adaptability', () => {
+// Browser geometry/contrast is verified against the same-SHA image; these cover interaction contracts.
+describe('App navigation, theme and responsive lifecycle', () => {
   let app: VueApp | null = null
-  let container: HTMLDivElement | null = null
-
+  let container: HTMLDivElement
   beforeEach(() => {
     container = document.createElement('div')
     document.body.appendChild(container)
+    setLocale('zh-CN')
+    localStorage.removeItem('csp_sidebar_collapsed')
     vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
       if (path === '/healthz') return { status: 'healthy' }
-      if (path === '/api/v1/auth/status') return { mode: 'open', authenticated: true, subject: 'admin' }
+      if (path === '/api/v1/auth/status') return { mode: 'open', authenticated: true, subject: '' }
       return { items: [], total: 0 }
     })
   })
-
   afterEach(() => {
-    if (app) {
-      app.unmount()
-      app = null
-    }
-    if (container && container.parentNode) {
-      container.parentNode.removeChild(container)
-      container = null
-    }
+    app?.unmount()
+    app = null
+    container.remove()
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    setLocale('zh-CN')
   })
-
-  it('renders mobile navigation dock with 4-item single row (Nodes, Policy, Subscriptions, More)', async () => {
-    router.push('/dashboard')
+  async function mount() {
+    await router.push('/dashboard')
     await router.isReady()
-
     app = createApp(App)
     app.use(router)
     app.use(i18n)
-    app.mount(container!)
+    app.mount(container)
     await nextTick()
+    await Promise.resolve()
+    await nextTick()
+  }
+  const themeButton = () => container.querySelector<HTMLButtonElement>('[data-testid="theme-toggle"]')!
+  const moreButton = () => container.querySelector<HTMLButtonElement>('[data-testid="dock-link-more"]')!
 
-    const dock = container!.querySelector('[data-testid="mobile-dock"]')
+  it('keeps three primary routes and six secondary routes accessible without rigid dock heights', async () => {
+    await mount()
+    const dock = container.querySelector<HTMLElement>('[data-testid="mobile-dock"]')!
     expect(dock).toBeTruthy()
-
-    // Verify it doesn't contain hardcoded h-16 or min-h-[48px]
-    expect(dock!.classList.contains('h-16')).toBe(false)
-    expect(dock!.classList.contains('min-h-[48px]')).toBe(false)
-
-    // Verify dynamic safe area padding class
-    expect(dock!.classList.contains('py-2')).toBe(true)
-    expect(dock!.classList.contains('rounded-2xl') || dock!.classList.contains('rounded-full')).toBe(true)
-
-    // Verify single-row 4-column grid layout
-    const grid = dock!.querySelector('.grid-cols-4')
-    expect(grid).toBeTruthy()
-
-    // Primary 3 routes on dock
-    const primaryRouteIds = ['nodes', 'policy', 'subscriptions']
-    for (const routeId of primaryRouteIds) {
-      const linkBtn = dock!.querySelector(`[data-testid="dock-link-${routeId}"]`)
-      expect(linkBtn, `Mobile dock must contain explicit entry for ${routeId}`).toBeTruthy()
+    expect(dock.classList.contains('h-14')).toBe(false)
+    expect(dock.classList.contains('min-h-[48px]')).toBe(false)
+    expect(dock.classList.contains('py-2')).toBe(true)
+    expect(dock.querySelector('.grid-cols-4')).toBeTruthy()
+    for (const route of ['nodes', 'policy', 'subscriptions']) {
+      expect(dock.querySelector(`a[data-testid="dock-link-${route}"]`)?.getAttribute('href')).toBe(`#/${route}`)
     }
-
-    // 4th item: More button
-    const moreBtn = dock!.querySelector('[data-testid="dock-link-more"]') as HTMLButtonElement
-    expect(moreBtn).toBeTruthy()
-    expect(moreBtn.getAttribute('aria-expanded')).toBe('false')
-
-    // Click More to open More sheet
-    moreBtn.click()
+    expect(moreButton().getAttribute('aria-expanded')).toBe('false')
+    moreButton().focus()
+    moreButton().click()
     await nextTick()
-    expect(moreBtn.getAttribute('aria-expanded')).toBe('true')
-
-    const moreSheet = document.querySelector('[data-testid="mobile-more-sheet"]')
-    expect(moreSheet).toBeTruthy()
-
-    // The other 6 routes are accessible in the More sheet
-    const secondaryRouteIds = ['dashboard', 'dns', 'chains', 'rules', 'publications', 'settings']
-    for (const routeId of secondaryRouteIds) {
-      const linkBtn = moreSheet!.querySelector(`[data-testid="dock-link-${routeId}"]`)
-      expect(linkBtn, `More sheet must contain entry for ${routeId}`).toBeTruthy()
+    await nextTick()
+    expect(moreButton().getAttribute('aria-expanded')).toBe('true')
+    const sheet = document.querySelector('[data-testid="mobile-more-sheet"]')!
+    expect(sheet.closest('[role="dialog"]')).toBeTruthy()
+    for (const route of ['dashboard', 'dns', 'chains', 'rules', 'publications', 'settings']) {
+      expect(sheet.querySelector(`a[data-testid="dock-link-${route}"]`)).toBeTruthy()
     }
-
-    // Verify nav action buttons do not enforce rigid min-h-[48px] or h-full
-    const navButtons = dock!.querySelectorAll('button')
-    expect(navButtons.length).toBeGreaterThan(0)
-    for (const btn of Array.from(navButtons)) {
-      expect(btn.classList.contains('min-h-[48px]')).toBe(false)
-      expect(btn.classList.contains('h-full')).toBe(false)
-    }
+    expect(document.body.style.overflow).toBe('hidden')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+    await nextTick()
+    await nextTick()
+    expect(document.querySelector('[data-testid="mobile-more-sheet"]')).toBeNull()
+    expect(document.activeElement).toBe(moreButton())
+    expect(document.body.style.overflow).not.toBe('hidden')
   })
 
-  it('renders desktop grouped sidebar navigation with collapse toggle', async () => {
-    router.push('/dashboard')
-    await router.isReady()
-
-    app = createApp(App)
-    app.use(router)
-    app.use(i18n)
-    app.mount(container!)
+  it('closes the mobile sheet on desktop resize and does not leave scrolling locked', async () => {
+    await mount()
+    moreButton().click()
     await nextTick()
+    vi.stubGlobal('innerWidth', 1280)
+    window.dispatchEvent(new Event('resize'))
+    await nextTick()
+    expect(moreButton().getAttribute('aria-expanded')).toBe('false')
+    expect(document.body.style.overflow).not.toBe('hidden')
+  })
 
-    const sidebar = container!.querySelector('aside')
-    expect(sidebar).toBeTruthy()
-
-    const collapseToggle = sidebar!.querySelector('[data-testid="sidebar-collapse-toggle"]') as HTMLButtonElement
-    expect(collapseToggle).toBeTruthy()
-
-    const nav = sidebar!.querySelector('nav')
-    expect(nav).toBeTruthy()
-
-    // All 9 routes must exist in desktop sidebar
-    const allRouteIds = ['dashboard', 'subscriptions', 'nodes', 'dns', 'chains', 'policy', 'rules', 'publications', 'settings']
-    for (const routeId of allRouteIds) {
-      const link = sidebar!.querySelector(`button[href="#/${routeId}"], button[href="/${routeId}"]`)
-      expect(link, `Desktop sidebar must contain entry for ${routeId}`).toBeTruthy()
+  it('provides every desktop route as a native link with a named collapsed state', async () => {
+    await mount()
+    const sidebar = container.querySelector('aside')!
+    sidebar.querySelector<HTMLButtonElement>('[data-testid="sidebar-collapse-toggle"]')!.click()
+    await nextTick()
+    for (const route of ['dashboard', 'nodes', 'subscriptions', 'policy', 'rules', 'dns', 'chains', 'publications', 'settings']) {
+      const link = sidebar.querySelector(`a[href="#/${route}"]`)!
+      expect(link).toBeTruthy()
+      expect(link.getAttribute('aria-label')).toBeTruthy()
     }
+    expect(sidebar.querySelector('[data-testid="sidebar-collapse-toggle"]')?.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('header topbar ensures dropdowns are not clipped while maintaining class contract', async () => {
-    router.push('/dashboard')
-    await router.isReady()
-
-    app = createApp(App)
-    app.use(router)
-    app.use(i18n)
-    app.mount(container!)
+  it('opens an accessible theme menu, supports arrow keys, persists selection and restores focus', async () => {
+    await mount()
+    const toggle = themeButton()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    toggle.click()
     await nextTick()
-
-    const header = container!.querySelector('header')
-    expect(header).toBeTruthy()
-    // The topbar header must have overflow-visible overriding any clipping so dropdown-content can expand downwards
-    expect(header!.classList.contains('overflow-visible')).toBe(true)
-  })
-
-  it('theme dropdown toggles open and closed on button click, with proper aria and focus behavior', async () => {
-    router.push('/dashboard')
-    await router.isReady()
-
-    app = createApp(App)
-    app.use(router)
-    app.use(i18n)
-    app.mount(container!)
     await nextTick()
-
-    const themeToggleBtn = container!.querySelector('header button[aria-label="Toggle Theme"]') as HTMLButtonElement
-    expect(themeToggleBtn).toBeTruthy()
-
-    const dropdown = themeToggleBtn.closest('.dropdown') as HTMLElement
-    expect(dropdown).toBeTruthy()
-    expect(dropdown.classList.contains('dropdown-end')).toBe(true)
-
-    // Initially closed
-    expect(themeToggleBtn.getAttribute('aria-expanded')).toBe('false')
-    expect(dropdown.classList.contains('dropdown-open')).toBe(false)
-
-    // Click to open
-    themeToggleBtn.click()
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    const options = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'))
+    expect(options).toHaveLength(7)
+    expect(document.activeElement).toBe(options.find((item) => item.getAttribute('aria-checked') === 'true'))
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }))
+    expect(document.activeElement).toBe(options[0])
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
+    expect(document.activeElement).toBe(options.at(-1))
+    options.find((item) => item.textContent?.includes('赛博朋克') || item.textContent?.toLowerCase().includes('cyberpunk'))!.click()
     await nextTick()
-    expect(themeToggleBtn.getAttribute('aria-expanded')).toBe('true')
-    expect(dropdown.classList.contains('dropdown-open')).toBe(true)
-
-    // Click again to close
-    themeToggleBtn.click()
-    await nextTick()
-    expect(themeToggleBtn.getAttribute('aria-expanded')).toBe('false')
-    expect(dropdown.classList.contains('dropdown-open')).toBe(false)
-  })
-
-  it('selecting a theme option applies theme, persists to storage, and closes dropdown', async () => {
-    router.push('/dashboard')
-    await router.isReady()
-
-    app = createApp(App)
-    app.use(router)
-    app.use(i18n)
-    app.mount(container!)
-    await nextTick()
-
-    const themeToggleBtn = container!.querySelector('header button[aria-label="Toggle Theme"]') as HTMLButtonElement
-    const dropdown = themeToggleBtn.closest('.dropdown') as HTMLElement
-
-    // Open dropdown
-    themeToggleBtn.click()
-    await nextTick()
-    expect(dropdown.classList.contains('dropdown-open')).toBe(true)
-
-    const themeOptions = Array.from(dropdown.querySelectorAll('.dropdown-content button')) as HTMLButtonElement[]
-    expect(themeOptions.length).toBeGreaterThan(0)
-
-    const cyberpunkOption = themeOptions.find((btn) => {
-      const label = btn.textContent?.trim().toLowerCase() ?? ''
-      return label === 'cyberpunk' || label === '赛博朋克'
-    })
-    expect(cyberpunkOption).toBeTruthy()
-
-    cyberpunkOption!.click()
-    await nextTick()
-
     expect(document.documentElement.getAttribute('data-theme')).toBe('cyberpunk')
-    expect(window.localStorage.getItem('csp_theme')).toBe('cyberpunk')
-    expect(dropdown.classList.contains('dropdown-open')).toBe(false)
-    expect(themeToggleBtn.getAttribute('aria-expanded')).toBe('false')
+    expect(localStorage.getItem('csp_theme')).toBe('cyberpunk')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(toggle)
   })
 
-  it('escape key closes open theme dropdown and more sheet', async () => {
-    router.push('/dashboard')
-    await router.isReady()
-
-    app = createApp(App)
-    app.use(router)
-    app.use(i18n)
-    app.mount(container!)
+  it('closes theme on Escape or outside click without leaving a mobile scroll lock', async () => {
+    await mount()
+    themeButton().click()
     await nextTick()
-
-    const themeToggleBtn = container!.querySelector('header button[aria-label="Toggle Theme"]') as HTMLButtonElement
-    const dropdown = themeToggleBtn.closest('.dropdown') as HTMLElement
-
-    themeToggleBtn.click()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     await nextTick()
-    expect(dropdown.classList.contains('dropdown-open')).toBe(true)
-
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(themeButton().getAttribute('aria-expanded')).toBe('false')
+    themeButton().click()
     await nextTick()
-
-    expect(dropdown.classList.contains('dropdown-open')).toBe(false)
-    expect(themeToggleBtn.getAttribute('aria-expanded')).toBe('false')
-  })
-
-  it('clicking outside closes open theme dropdown', async () => {
-    router.push('/dashboard')
-    await router.isReady()
-
-    app = createApp(App)
-    app.use(router)
-    app.use(i18n)
-    app.mount(container!)
-    await nextTick()
-
-    const themeToggleBtn = container!.querySelector('header button[aria-label="Toggle Theme"]') as HTMLButtonElement
-    const dropdown = themeToggleBtn.closest('.dropdown') as HTMLElement
-
-    themeToggleBtn.click()
-    await nextTick()
-    expect(dropdown.classList.contains('dropdown-open')).toBe(true)
-
-    // Click outside
     document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await nextTick()
-
-    expect(dropdown.classList.contains('dropdown-open')).toBe(false)
-    expect(themeToggleBtn.getAttribute('aria-expanded')).toBe('false')
+    expect(themeButton().getAttribute('aria-expanded')).toBe('false')
+    expect(document.body.style.overflow).not.toBe('hidden')
   })
 
-  it('header layout resilience across mobile (375x667, 392x872) and desktop viewports', async () => {
-    router.push('/dashboard')
-    await router.isReady()
-
-    app = createApp(App)
-    app.use(router)
-    app.use(i18n)
-    app.mount(container!)
+  it('keeps the header controls unclipped and updates accessible labels with locale', async () => {
+    await mount()
+    const header = container.querySelector('header')!
+    expect(header.classList.contains('overflow-visible')).toBe(true)
+    expect(header.querySelector('.min-w-0')).toBeTruthy()
+    expect(header.children[1].classList.contains('shrink-0')).toBe(true)
+    expect(themeButton().closest('.dropdown-end')).toBeTruthy()
+    expect(themeButton().getAttribute('aria-label')).toBe('切换主题')
+    setLocale('en-US')
     await nextTick()
-
-    const header = container!.querySelector('header')
-    expect(header).toBeTruthy()
-
-    // Title area must have min-w-0 container and truncate class to prevent horizontal blowout
-    const titleArea = header!.querySelector('.min-w-0')
-    expect(titleArea).toBeTruthy()
-    const titleSpan = titleArea!.querySelector('.truncate')
-    expect(titleSpan).toBeTruthy()
-
-    // Right-side controls must have shrink-0
-    const rightControls = header!.children[1] as HTMLElement
-    expect(rightControls).toBeTruthy()
-    expect(rightControls.classList.contains('shrink-0')).toBe(true)
-
-    // Theme dropdown must be aligned to the end (dropdown-end) so it stays within viewport
-    const dropdown = rightControls.querySelector('.dropdown')
-    expect(dropdown).toBeTruthy()
-    expect(dropdown!.classList.contains('dropdown-end')).toBe(true)
+    expect(themeButton().getAttribute('aria-label')).toBe('Choose theme')
+    expect(document.documentElement.lang).toBe('en-US')
+    expect(header.textContent).toContain('Service online')
   })
 })

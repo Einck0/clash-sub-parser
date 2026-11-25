@@ -119,11 +119,12 @@ const parsedError = computed<ParsedErrorInfo>(() => {
 
   const lowerMsg = message.toLowerCase()
   const isCapability = status === 422 || code === 'unsupported_target_capability' || code === 'unsupported_target' || code === 'validation_failed' || code === 'empty_group_not_allowed' || code === 'snapshot_target_mismatch' || code === 'snapshot_not_publishable'
-  const isAuth = status === 401 || code === 'unauthorized' || lowerMsg.includes('unauthorized') || lowerMsg.includes('未授权') || lowerMsg.includes('token') || lowerMsg.includes('令牌')
-  const isForbidden = status === 403 || code === 'forbidden' || lowerMsg.includes('forbidden') || lowerMsg.includes('拒绝访问') || lowerMsg.includes('无权限')
-  const isConflict = status === 409 || code === 'conflict' || lowerMsg.includes('conflict') || lowerMsg.includes('冲突')
-  const isNetwork = !isCapability && (lowerMsg.includes('network') || lowerMsg.includes('failed to fetch') || lowerMsg.includes('networkerror') || lowerMsg.includes('无法连接'))
-  const isServerError = (status !== undefined && status >= 500) || lowerMsg.includes('internal server error') || lowerMsg.includes('500')
+  const textualFallback = status === undefined && !code
+  const isAuth = status === 401 || code === 'unauthorized' || (textualFallback && (lowerMsg.includes('unauthorized') || lowerMsg.includes('未授权')))
+  const isForbidden = status === 403 || code === 'forbidden' || (textualFallback && (lowerMsg.includes('forbidden') || lowerMsg.includes('拒绝访问') || lowerMsg.includes('无权限')))
+  const isConflict = status === 409 || code === 'conflict' || (textualFallback && (lowerMsg.includes('conflict') || lowerMsg.includes('冲突')))
+  const isNetwork = !isCapability && status === undefined && !code && (lowerMsg.includes('network') || lowerMsg.includes('failed to fetch') || lowerMsg.includes('networkerror') || lowerMsg.includes('无法连接'))
+  const isServerError = (status !== undefined && status >= 500) || (textualFallback && lowerMsg.includes('internal server error'))
 
   const codeTitle = translateErrorCode(code)
   let friendlyTitle = props.title
@@ -195,7 +196,7 @@ function handleAuthRecovery() {
 <template>
   <div
     role="alert"
-    class="rounded-xl border border-error/30 bg-error/10 p-4 sm:p-5 text-base-content shadow-sm transition-all duration-200"
+    class="rounded-xl border border-error/30 bg-error/10 p-4 sm:p-5 text-base-content shadow-sm transition-all duration-200 [overflow-wrap:anywhere]"
     data-testid="error-state-card"
   >
     <div class="flex items-start gap-3.5">

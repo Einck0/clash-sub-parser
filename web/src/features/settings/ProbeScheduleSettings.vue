@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { ArrowPathIcon, CalendarDaysIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@heroicons/vue/24/outline'
+import { ArrowPathIcon, ExclamationTriangleIcon } from '@heroicons/vue/24/outline'
 import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
 import type { ProbeKind, ProbeSchedule } from '../probes/probeTypes'
 import { displayText } from '../../utils/displayNames'
+import { uiText } from '../../locales/redesign'
+import { useServerSettings } from './useServerSettings'
 
 const ALL_KINDS: readonly { id: ProbeKind; labelKey: string }[] = [
   { id: 'baseline', labelKey: 'settings.probeKindBaseline' },
@@ -19,16 +21,30 @@ const ALL_KINDS: readonly { id: ProbeKind; labelKey: string }[] = [
 const enabled = ref(false)
 const intervalSeconds = ref(3600)
 const selectedKinds = ref<ProbeKind[]>(['baseline'])
-const loading = ref(false)
-const saving = ref(false)
-const errorMessage = ref('')
-const lastUpdated = ref('')
+const state = useServerSettings<ProbeSchedule>({
+  read: () => api.get<ProbeSchedule>('/api/v1/probes/schedule'),
+  apply: value => {
+    if (!value || typeof value.enabled !== 'boolean' || !Number.isInteger(value.interval_seconds) ||
+      value.interval_seconds < 60 || value.interval_seconds > 604800 || !Array.isArray(value.kinds) ||
+      !value.kinds.length || value.kinds.some(kind => !ALL_KINDS.some(item => item.id === kind))) {
+      throw new Error(uiText('服务端返回的巡检配置无效', 'The server returned invalid probe schedule settings.'))
+    }
+    enabled.value = value.enabled
+    intervalSeconds.value = value.interval_seconds
+    selectedKinds.value = [...value.kinds]
+  },
+  snapshot: () => ({ enabled: enabled.value, seconds: intervalSeconds.value, kinds: selectedKinds.value }),
+})
+const { loading, saving, loaded, readFailed, error: errorMessage } = state
+const fetchSchedule = state.load
 
-function toggleKind(kind: ProbeKind) {
+function toggleKind(kind: ProbeKind, event: Event) {
   const current = new Set(selectedKinds.value)
   if (current.has(kind)) {
     if (current.size <= 1) {
-      errorMessage.value = '必须至少保留一个检测项目'
+      const checkbox = event.target as HTMLInputElement
+      checkbox.checked = true
+      errorMessage.value = uiText('必须至少保留一个检测项目', 'Keep at least one probe kind selected.')
       return
     }
     current.delete(kind)
@@ -39,67 +55,26 @@ function toggleKind(kind: ProbeKind) {
   errorMessage.value = ''
 }
 
-async function fetchSchedule() {
-  loading.value = true
-  errorMessage.value = ''
-  try {
-    const res = await api.get<ProbeSchedule>('/api/v1/probes/schedule')
-    if (res && typeof res === 'object') {
-      enabled.value = !!res.enabled
-      if (typeof res.interval_seconds === 'number' && res.interval_seconds >= 60 && res.interval_seconds <= 604800) {
-        intervalSeconds.value = res.interval_seconds
-      }
-      if (Array.isArray(res.kinds) && res.kinds.length > 0) {
-        selectedKinds.value = [...res.kinds]
-      }
-      lastUpdated.value = res.updated_at || ''
-    }
-  } catch (err: any) {
-    errorMessage.value = displayText(err?.message || '获取探针巡检配置失败')
-  } finally {
-    loading.value = false
-  }
-}
-
 async function saveSchedule() {
   const sec = Number(intervalSeconds.value)
-  if (isNaN(sec) || sec < 60 || sec > 604800) {
-    errorMessage.value = '默认检测周期必须在 60 到 604800 秒之间'
+  if (!Number.isInteger(sec) || sec < 60 || sec > 604800) {
+    errorMessage.value = uiText('默认检测周期必须在 60 到 604800 秒之间，且为整数', 'Probe interval must be an integer from 60 to 604800 seconds.')
     toastStore.push({ message: errorMessage.value, tone: 'error' })
     return
   }
 
   if (selectedKinds.value.length === 0) {
-    errorMessage.value = '必须至少选择一个检测项目'
+    errorMessage.value = uiText('必须至少选择一个检测项目', 'Select at least one probe kind.')
     toastStore.push({ message: errorMessage.value, tone: 'error' })
     return
   }
 
-  saving.value = true
-  errorMessage.value = ''
-  try {
-    const res = await api.put<ProbeSchedule>('/api/v1/probes/schedule', {
-      enabled: enabled.value,
-      interval_seconds: sec,
-      kinds: selectedKinds.value,
-    })
-    // Read-back verification from server response
-    if (res && typeof res === 'object') {
-      enabled.value = !!res.enabled
-      if (typeof res.interval_seconds === 'number') {
-        intervalSeconds.value = res.interval_seconds
-      }
-      if (Array.isArray(res.kinds) && res.kinds.length > 0) {
-        selectedKinds.value = [...res.kinds]
-      }
-      lastUpdated.value = res.updated_at || ''
-    }
+  if (await state.save(() => api.put<ProbeSchedule>('/api/v1/probes/schedule', {
+    enabled: enabled.value,
+    interval_seconds: sec,
+    kinds: [...selectedKinds.value],
+  }))) {
     toastStore.push({ message: t('settings.probeScheduleSaved'), tone: 'success' })
-  } catch (err: any) {
-    errorMessage.value = displayText(err?.message || t('settings.probeScheduleSaveFailed'))
-    toastStore.push({ message: errorMessage.value, tone: 'error' })
-  } finally {
-    saving.value = false
   }
 }
 
@@ -110,6 +85,8 @@ onMounted(() => {
 
 <template>
   <div class="space-y-4" data-testid="probe-schedule-settings">
+    <p v-if="loading && !loaded" role="status" class="text-xs text-base-content/60">{{ t('common.loading') }}</p>
+    <fieldset v-if="loaded" :disabled="loading || saving || readFailed" class="space-y-4 min-w-0">
     <!-- Auto Patrol Master Switch -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-base-100/70 border border-base-300">
       <div class="space-y-0.5">
@@ -119,7 +96,7 @@ onMounted(() => {
             class="badge badge-xs"
             :class="enabled ? 'badge-success' : 'badge-ghost'"
           >
-            {{ enabled ? '运行中' : '已停用' }}
+            {{ enabled ? uiText('运行中', 'Enabled') : uiText('已停用', 'Disabled') }}
           </span>
         </label>
         <p class="text-[11px] text-base-content/60 leading-relaxed max-w-xl">
@@ -141,7 +118,7 @@ onMounted(() => {
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <!-- Default Interval -->
       <div class="space-y-2 p-3.5 rounded-xl bg-base-100/70 border border-base-300">
-        <label class="text-xs sm:text-sm font-semibold block">
+        <label for="probe-schedule-interval-input" class="text-xs sm:text-sm font-semibold block">
           {{ t('settings.probeDefaultInterval') }}
         </label>
         <p class="text-[11px] text-base-content/60">
@@ -149,6 +126,7 @@ onMounted(() => {
         </p>
         <div class="flex items-center gap-2 pt-1">
           <input
+            id="probe-schedule-interval-input"
             v-model.number="intervalSeconds"
             type="number"
             min="60"
@@ -159,7 +137,7 @@ onMounted(() => {
             :disabled="loading || saving"
           />
           <span class="text-xs font-mono text-base-content/60 shrink-0">
-            ≈ {{ Math.round(intervalSeconds / 60) }} 分钟
+            ≈ {{ Math.round(intervalSeconds / 60) }} {{ uiText('分钟', 'min') }}
           </span>
         </div>
       </div>
@@ -170,7 +148,7 @@ onMounted(() => {
           {{ t('settings.probeKinds') }}
         </label>
         <p class="text-[11px] text-base-content/60">
-          勾选系统自动巡检时需要执行的能力观测维度：
+          {{ uiText('勾选系统自动巡检时需要执行的能力观测维度：', 'Choose the capabilities to check during automatic patrols:') }}
         </p>
         <div class="grid grid-cols-2 gap-2 pt-1">
           <label
@@ -184,7 +162,7 @@ onMounted(() => {
               :data-testid="`probe-kind-checkbox-${item.id}`"
               class="checkbox checkbox-primary checkbox-xs"
               :disabled="loading || saving"
-              @change="toggleKind(item.id)"
+              @change="toggleKind(item.id, $event)"
             />
             <span class="truncate">{{ t(item.labelKey) }}</span>
           </label>
@@ -216,11 +194,12 @@ onMounted(() => {
           <ArrowPathIcon class="w-4 h-4" :class="{ 'animate-spin': loading }" />
         </button>
       </div>
-
-      <p v-if="errorMessage" class="text-xs text-error font-mono flex items-center gap-1" data-testid="probe-schedule-error">
-        <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-        <span>{{ errorMessage }}</span>
-      </p>
+    </div>
+    </fieldset>
+    <div v-if="errorMessage" role="alert" class="text-xs text-error flex flex-wrap items-center gap-2" data-testid="probe-schedule-error">
+      <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
+      <span class="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ displayText(errorMessage) }}</span>
+      <button type="button" class="btn btn-sm btn-ghost" :disabled="loading || saving" @click="fetchSchedule">{{ t('common.retry') }}</button>
     </div>
   </div>
 </template>

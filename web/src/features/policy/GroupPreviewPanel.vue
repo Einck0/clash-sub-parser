@@ -130,11 +130,11 @@ const exclusionBreakdown = computed(() => {
     <div
       v-if="error"
       role="alert"
-      class="p-3 rounded-xl bg-warning/10 border border-warning/30 text-warning text-xs flex items-center justify-between gap-2"
+      class="p-3 rounded-xl bg-warning/10 border border-warning/30 text-warning text-xs flex items-start justify-between gap-2"
     >
       <div class="flex items-center gap-2 min-w-0">
         <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-        <span class="truncate">{{ displayText(error) }}</span>
+        <span class="min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{{ displayText(error) }}</span>
       </div>
       <button
         type="button"
@@ -275,7 +275,7 @@ const exclusionBreakdown = computed(() => {
         />
         <InformationCircleIcon v-else class="w-4 h-4 shrink-0 mt-0.5" />
         <div class="min-w-0">
-          <p class="font-semibold">
+          <p class="font-semibold whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
             {{ displayText(typeof diag === 'string' ? diag : diag.message) }}
           </p>
         </div>

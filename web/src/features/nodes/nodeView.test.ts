@@ -673,7 +673,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     expect(healthFilterSelect?.textContent).toContain('检测中')
 
     // 1. Inspect & edit WireGuard node via real API detail + direct plaintext PATCH
-    ;(cards[0] as HTMLElement).click()
+    ;cards[0]!.querySelector<HTMLButtonElement>('[data-testid="node-inspect-btn"]')!.click()
     await nextTick()
     await new Promise((r) => setTimeout(r, 30))
 
@@ -741,7 +741,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     expect(previewEl?.textContent).toContain('"private_key": "UPDATED-WG-PRIVATE-KEY"')
 
     // 2. Inspect TUIC node and verify PATCH failure preserves uncommitted draft without fake in-memory save
-    ;(cards[1] as HTMLElement).click()
+    ;cards[1]!.querySelector<HTMLButtonElement>('[data-testid="node-inspect-btn"]')!.click()
     await nextTick()
     await new Promise((r) => setTimeout(r, 30))
 
@@ -1177,7 +1177,7 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
     const headerEl = mountEl.querySelector('.hidden.md\\:flex')
     expect(headerEl).not.toBeNull()
     expect(headerEl?.textContent).toContain('节点信息')
-    expect(headerEl?.textContent).toContain('协议与端点')
+    expect(headerEl?.textContent).toContain('检测与详情')
     expect(headerEl?.textContent).toContain('探测健康与能力')
 
     // 2. Node card article uses responsive compact row & card classes
@@ -1721,18 +1721,24 @@ describe('NodesView real API detail, plaintext PATCH edit, and failure draft pre
       // 4. Toggle platform details
       const toggleBtn = mountEl.querySelector('[data-testid="node-platform-details-toggle"]') as HTMLButtonElement
       expect(toggleBtn).not.toBeNull()
-      expect(toggleBtn.textContent).toContain('平台能力')
+      expect(toggleBtn.textContent).toContain('能力与端点')
+      expect(toggleBtn.getAttribute('aria-expanded')).toBe('false')
+      // Saved speed remains in the secondary summary even when details are collapsed.
+      expect(mountEl.querySelector('[data-testid="node-secondary-status"]')?.textContent).toContain('MB/s')
       toggleBtn.click()
       await nextTick()
+      expect(toggleBtn.getAttribute('aria-expanded')).toBe('true')
 
-      // 5. Expanded accordion displays streaming, AI and speed badges
+      // 5. Expanded accordion displays endpoint, streaming and AI evidence without duplicating speed
       const expandedEl = mountEl.querySelector('[data-testid="node-platform-details-expanded"]')
       expect(expandedEl).not.toBeNull()
       expect(expandedEl?.textContent).toContain('NETFLIX')
       // Legacy OpenAI `available` observations are retained as endpoint history,
       // not represented as verified service capability.
       expect(expandedEl?.textContent).toContain('旧版探测结果，需重新检测')
-      expect(expandedEl?.textContent).toContain('MB/s')
+      expect(expandedEl?.textContent).not.toContain('MB/s')
+      expect(mountEl.querySelector('[data-testid="node-secondary-status"]')?.textContent).toContain('MB/s')
+      expect(expandedEl?.querySelector('[data-testid="node-target-compatibility"]')).not.toBeNull()
 
       // 6. getNodeGeoRegion unit checks: does NOT guess country from name
       expect(getNodeGeoRegion({ logical_id: 'node-name-kr', display_name: '🇰🇷 Seoul Korea 01', protocol: 'ss', active: true })).toBeNull()

@@ -1,4 +1,5 @@
 import { getCurrentInstance, inject, onUnmounted, type Ref, type ComputedRef } from 'vue'
+import { uiText } from '../locales'
 import { onBeforeRouteLeave, matchedRouteKey } from 'vue-router'
 
 export interface UseUnsavedChangesReturn {
@@ -29,7 +30,7 @@ export function useUnsavedChanges(
         // fallback
       }
     }
-    return 'You have unsaved changes. Are you sure you want to discard them?'
+    return uiText('有尚未保存的修改，确定要放弃吗？', 'You have unsaved changes. Are you sure you want to discard them?')
   }
 
   const confirmDiscard = (): boolean => {

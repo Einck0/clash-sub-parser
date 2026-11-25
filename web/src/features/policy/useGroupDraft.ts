@@ -74,7 +74,7 @@ export function useGroupDraft() {
   const formError = ref('')
 
   // Server error states
-  const conflictError = ref<{ currentRevision: number; message: string } | null>(null)
+  const conflictError = ref<{ currentRevision: number | null; message: string } | null>(null)
   const cycleError = ref<{ cyclePath: string[]; message: string } | null>(null)
   const serverError = ref<string | null>(null)
 

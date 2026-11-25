@@ -1,3 +1,5 @@
+import { uiText } from '../../locales'
+
 export type ProbeKind = 'baseline' | 'geo' | 'streaming' | 'ai' | 'speed' | 'ip_risk'
 
 export type ProbeRunState =
@@ -148,20 +150,13 @@ export const ALL_PROBE_KINDS: Array<{ kind: ProbeKind; label: string; desc: stri
 
 export function probeKindLabel(kind: ProbeKind | string): string {
   switch (kind) {
-    case 'baseline':
-      return '基础连通性'
-    case 'geo':
-      return '地域与出口 IP'
-    case 'streaming':
-      return '流媒体解锁'
-    case 'ai':
-      return 'AI 服务'
-    case 'speed':
-      return '带宽测速'
-    case 'ip_risk':
-      return 'IP 风险'
-    default:
-      return kind
+    case 'baseline': return uiText('基础连通性', 'Connectivity')
+    case 'geo': return uiText('地域与出口 IP', 'Region and exit IP')
+    case 'streaming': return uiText('流媒体解锁', 'Streaming access')
+    case 'ai': return uiText('AI 服务', 'AI services')
+    case 'speed': return uiText('带宽测速', 'Bandwidth test')
+    case 'ip_risk': return uiText('IP 风险', 'IP risk')
+    default: return kind
   }
 }
 
@@ -172,43 +167,27 @@ export function probeKindEmoji(kind: ProbeKind | string): string {
 
 export function probeStateLabel(state: ProbeRunState | ProbeBatchState | string): string {
   switch (state) {
-    case 'pending':
-      return '等待中'
-    case 'queued':
-      return '排队中'
-    case 'running':
-      return '运行中'
-    case 'succeeded':
-      return '已完成'
-    case 'failed':
-      return '已失败'
-    case 'cancelled':
-      return '已取消'
-    case 'expired':
-      return '已过期'
-    default:
-      return state
+    case 'pending': return uiText('等待中', 'Pending')
+    case 'queued': return uiText('排队中', 'Queued')
+    case 'running': return uiText('运行中', 'Running')
+    case 'succeeded': return uiText('已完成', 'Completed')
+    case 'failed': return uiText('已失败', 'Failed')
+    case 'cancelled': return uiText('已取消', 'Cancelled')
+    case 'expired': return uiText('已过期', 'Expired')
+    default: return state
   }
 }
 
 export function probeVerdictLabel(verdict: ProbeVerdict | string): string {
   switch (verdict) {
-    case 'available':
-      return '可用'
-    case 'abnormal':
-      return '异常'
-    case 'restricted':
-      return '降级/受限'
-    case 'unknown':
-      return '未知'
-    case 'error':
-      return '检测失败'
-    case 'skipped':
-      return '未执行'
-    case 'stale':
-      return '已过期'
-    default:
-      return verdict
+    case 'available': return uiText('可用', 'Available')
+    case 'abnormal': return uiText('异常', 'Conflicting evidence')
+    case 'restricted': return uiText('降级/受限', 'Restricted')
+    case 'unknown': return uiText('未知', 'Unknown')
+    case 'error': return uiText('检测失败', 'Probe failed')
+    case 'skipped': return uiText('未执行', 'Not executed')
+    case 'stale': return uiText('已过期', 'Stale')
+    default: return verdict
   }
 }
 
@@ -428,101 +407,70 @@ export function normalizePlatforms(
 }
 
 export function buildPlatformTooltip(platform: string, cap: PlatformCapability): string {
-  const normPlat = platform.trim().toLowerCase()
+  const name = platform.trim().toLowerCase()
   const parts: string[] = []
-
-  // 1. Platform-specific headline or summary
-  if (normPlat === 'antigravity') {
-    const entryReachable = cap.verdict === 'available' && cap.sub_tier === 'reachable' &&
+  if (name === 'antigravity') {
+    const reachable = cap.verdict === 'available' && cap.sub_tier === 'reachable' &&
       cap.evidence_scope === 'network_entry' && cap.reason === 'antigravity_entry_reachable'
-    const scope = entryReachable ? '官网入口可达' : '检测范围：官网入口连通性'
-    parts.push(`${scope}；个人账号所在国家/地区、年龄(18+)及模型资格未核验（依据官方 FAQ）`)
-  } else if (normPlat === 'gemini') {
-    parts.push('网页端区域支持检测；个人账号登录、年龄及模型权限未核验')
-  } else if (normPlat === 'openai') {
-    parts.push('匿名公开入口预检；账号登录、付费模型、Codex 能力及 App 能力未核验；API 鉴权、API 调用和模型推理未检测')
-    if (cap.sub_tier === 'full' || cap.sub_tier === 'web' || cap.sub_tier === 'app') {
-      parts.push('旧版入口分级仅作历史记录，不代表 ChatGPT/API/Codex 能力')
+    parts.push(reachable ? uiText('官网入口可达', 'Official site entry reachable') : uiText('检测范围：官网入口连通性', 'Scope: official site entry connectivity'))
+    parts.push(uiText('个人账号所在国家/地区、年龄(18+)及模型资格未核验（依据官方 FAQ）', 'Account country/region, age (18+), and model eligibility are not verified (official FAQ)'))
+  } else if (name === 'gemini') {
+    parts.push(uiText('网页端区域支持检测；个人账号登录、年龄及模型权限未核验', 'Web region support only; account login, age, and model permissions are not verified'))
+  } else if (name === 'openai') {
+    parts.push(uiText('匿名公开入口预检；账号登录、付费模型、Codex 能力及 App 能力未核验；API 鉴权、API 调用和模型推理未检测', 'Anonymous public-entry preflight only; account login, paid models, Codex and App access are unverified; API authentication, API calls and model inference are not tested'))
+    if (['full', 'web', 'app'].includes(cap.sub_tier ?? '')) {
+      parts.push(uiText('旧版入口分级仅作历史记录，不代表 ChatGPT/API/Codex 能力', 'Legacy entry tiers are historical only and do not establish ChatGPT/API/Codex access'))
     }
-    if (cap.sub_tier === 'banned') parts.push('旧版封禁标签不代表账号封禁')
-    for (const [name, check] of Object.entries(cap.checks ?? {})) {
-      const checkName = name === 'cookie_requirements' ? '合规入口' : name === 'chatgpt_web' ? '网页入口' : name
-      const checkVerdict =
-        check.verdict === 'available'
-          ? '已确认'
-          : check.verdict === 'restricted'
-            ? '明确受限'
-            : check.verdict === 'error'
-              ? '检测错误'
-              : check.verdict === 'abnormal'
-                ? '证据冲突'
-                : check.verdict === 'skipped'
-                  ? '未执行'
-                  : '待确认'
-      const checkParts = [`${checkName}: ${checkVerdict}`]
-      if (check.status_code !== undefined) checkParts.push(`HTTP ${check.status_code}`)
-      if (check.reason) checkParts.push(formatObservationReasonLabel(check.reason))
-      if (check.evidence_scope) checkParts.push(`范围 ${check.evidence_scope}`)
-      parts.push(checkParts.join(' · '))
-    }
-  } else if (normPlat === 'netflix') {
-    if (cap.sub_tier === 'full') parts.push('Netflix 全量剧集解锁')
-    else if (cap.sub_tier === 'originals') parts.push('Netflix 仅自制剧')
-    else if (cap.sub_tier === 'banned') parts.push('Netflix 已封禁')
-  } else if (normPlat === 'disney') {
-    if (cap.sub_tier === 'unlocked') parts.push('Disney+ 已解锁')
-    else if (cap.sub_tier === 'soon') parts.push('Disney+ 尚未开放')
-    else if (cap.sub_tier === 'banned') parts.push('Disney+ 已封禁')
+    if (cap.sub_tier === 'banned') parts.push(uiText('旧版封禁标签不代表账号封禁', 'Legacy blocked labels do not establish an account ban'))
+  } else if (name === 'netflix') {
+    if (cap.sub_tier === 'full') parts.push(uiText('Netflix 全量剧集解锁', 'Netflix full catalog observed'))
+    if (cap.sub_tier === 'originals') parts.push(uiText('Netflix 仅自制剧', 'Netflix originals only'))
+    if (cap.sub_tier === 'banned') parts.push(uiText('Netflix 已封禁', 'Netflix entry blocked'))
+  } else if (name === 'disney') {
+    if (cap.sub_tier === 'unlocked') parts.push(uiText('Disney+ 已解锁', 'Disney+ access observed'))
+    if (cap.sub_tier === 'soon') parts.push(uiText('Disney+ 尚未开放', 'Disney+ not yet available'))
+    if (cap.sub_tier === 'banned') parts.push(uiText('Disney+ 已封禁', 'Disney+ entry blocked'))
   }
 
-  // 2. Reason label / summary
-  const reasonText = cap.reason ? formatObservationReasonLabel(cap.reason) : ''
-  if (reasonText && !parts.some((p) => p.includes(reasonText))) {
-    parts.push(reasonText)
+  // 每个平台的子检查都进入可见正文，不把证据限制留在悬浮提示中
+  for (const [key, check] of Object.entries(cap.checks ?? {})) {
+    const checkName = key === 'cookie_requirements' ? uiText('合规入口', 'Compliance entry')
+      : key === 'chatgpt_web' ? uiText('网页入口', 'Web entry') : key
+    const checkVerdict = check.verdict === 'available' ? uiText('已确认', 'Confirmed') : probeVerdictLabel(check.verdict)
+    const values = [`${checkName}: ${checkVerdict}`]
+    if (check.status_code !== undefined) values.push(`HTTP ${check.status_code}`)
+    if (check.reason) values.push(formatObservationReasonLabel(check.reason))
+    if (check.evidence_scope) values.push(`${uiText('范围', 'Scope')} ${check.evidence_scope}`)
+    parts.push(values.join(' · '))
   }
-  if (cap.summary && cap.summary !== reasonText && !parts.some((p) => p.includes(cap.summary!))) {
-    parts.push(cap.summary)
+  const reason = formatObservationReasonLabel(cap.reason)
+  if (reason && !parts.some((part) => part.includes(reason))) parts.push(reason)
+  if (cap.summary && cap.summary !== reason && !parts.some((part) => part.includes(cap.summary!))) parts.push(cap.summary)
+
+  const serviceRegion = cap.region && cap.region.toLowerCase() !== 'unknown' ? cap.region.toUpperCase() : undefined
+  const exitRegion = cap.exit_region && cap.exit_region.toLowerCase() !== 'unknown' ? cap.exit_region.toUpperCase() : undefined
+  if (serviceRegion) parts.push(`${uiText('服务观测地区', 'Observed service region')}: ${serviceRegion}`)
+  if (exitRegion) parts.push(`${uiText('出口参考地区', 'Reference exit region')}: ${exitRegion}`)
+  if (serviceRegion && exitRegion && serviceRegion !== exitRegion) {
+    parts.push(uiText('地区存在差异，非物理路由绝对证明', 'Regions differ; this is not definitive proof of physical routing'))
   }
-
-  // 3. Observed service country vs exit/geo reference
-  const srvRegion = cap.region && cap.region.toLowerCase() !== 'unknown' ? cap.region.toUpperCase() : undefined
-  const exitRegion =
-    cap.exit_region && cap.exit_region.toLowerCase() !== 'unknown' ? cap.exit_region.toUpperCase() : undefined
-
-  if (srvRegion && exitRegion) {
-    if (srvRegion !== exitRegion) {
-      parts.push(`服务观测地区: ${srvRegion}，出口参考地区: ${exitRegion}（地区存在差异，非物理路由绝对证明）`)
-    } else {
-      parts.push(`服务观测地区: ${srvRegion}，出口参考地区: ${exitRegion}`)
-    }
-  } else if (srvRegion) {
-    parts.push(`服务观测地区: ${srvRegion}`)
-  } else if (exitRegion) {
-    parts.push(`出口参考地区: ${exitRegion}`)
-  }
-
-  // 4. Region Source display
   if (cap.region_source) {
-    const srcMap: Record<string, string> = {
-      service: '服务直测 (service)',
-      cdn_trace: 'CDN 追踪 (cdn_trace)',
-      cdn_target: 'CDN 目标节点 (cdn_target)',
+    const sourceLabels: Record<string, string> = {
+      service: uiText('服务直测 (service)', 'Direct service observation (service)'),
+      cdn_trace: uiText('CDN 追踪 (cdn_trace)', 'CDN trace (cdn_trace)'),
+      cdn_target: uiText('CDN 目标节点 (cdn_target)', 'CDN target (cdn_target)'),
     }
-    const srcLabel = srcMap[cap.region_source] || cap.region_source
-    parts.push(`地区来源: ${srcLabel}`)
+    parts.push(`${uiText('地区来源', 'Region source')}: ${sourceLabels[cap.region_source] || cap.region_source}`)
   }
-
-  // 5. Evidence Scope display
   if (cap.evidence_scope) {
-    const scopeMap: Record<string, string> = {
-      network_entry: '观测范围: 网站入口连通性 (network_entry)',
-      web_region: '观测范围: 网页端区域支持 (web_region)',
-      cdn_trace: '观测范围: CDN 节点出口 (cdn_trace)',
+    const scopeLabels: Record<string, string> = {
+      network_entry: uiText('网站入口连通性 (network_entry)', 'Site entry connectivity (network_entry)'),
+      web_region: uiText('网页端区域支持 (web_region)', 'Web region support (web_region)'),
+      cdn_trace: uiText('CDN 节点出口 (cdn_trace)', 'CDN exit (cdn_trace)'),
+      anonymous_preflight: uiText('匿名公开入口预检 (anonymous_preflight)', 'Anonymous entry preflight (anonymous_preflight)'),
     }
-    const scopeLabel = scopeMap[cap.evidence_scope] || `观测范围: ${cap.evidence_scope}`
-    parts.push(scopeLabel)
+    parts.push(`${uiText('观测范围', 'Scope')}: ${scopeLabels[cap.evidence_scope] || cap.evidence_scope}`)
   }
-
   return parts.join(' · ')
 }
 
@@ -767,9 +715,38 @@ export function formatPlatformBadge(platform: string, cap: PlatformCapability): 
     }
   }
 
+  const openAILabels: Record<string, string> = {
+    'OpenAI 结果过期': 'OpenAI results stale',
+    'OpenAI 未执行': 'OpenAI not executed',
+    'OpenAI 预检证据冲突': 'OpenAI preflight evidence conflicts',
+    'OpenAI 入口限流': 'OpenAI entry rate limited',
+    'OpenAI 入口受限': 'OpenAI entry restricted',
+    'OpenAI 检测失败': 'OpenAI probe failed',
+    'OpenAI 预检通过': 'OpenAI preflight passed',
+    '旧版探测结果，需重新检测': 'Legacy probe result; test again',
+    'OpenAI 预检部分证据': 'OpenAI partial preflight evidence',
+    'OpenAI 入口响应（能力未核验）': 'OpenAI entry responded (capability unverified)',
+    'OpenAI 能力未核验': 'OpenAI capability unverified',
+  }
+  if (normPlat === 'openai') {
+    label = uiText(label, openAILabels[label] ?? label)
+  } else {
+    const name = ({ netflix: 'NF', disney: 'D+', youtube: 'YT', claude: 'Claude', gemini: 'Gemini', antigravity: 'Antigravity' } as Record<string, string>)[normPlat] ?? platform.toUpperCase()
+    let status = ''
+    if (subTier === 'banned') status = 'blocked'
+    else if (verdict === 'abnormal') status = 'conflicting evidence'
+    else if (verdict === 'skipped') status = 'not executed'
+    else if (normPlat === 'netflix' && subTier === 'originals') status = 'originals only'
+    else if (normPlat === 'disney' && subTier === 'soon') status = 'not yet available'
+    else if (verdict === 'restricted') status = 'restricted'
+    else if (verdict === 'error') status = 'failed'
+    else if (normPlat === 'antigravity' && verdict === 'available') status = 'entry reachable'
+    label = uiText(label, `${name}${status ? ` ${status}` : ''}${region ? ` (${region})` : ''}`)
+  }
+
   // Stale handling: append status and set tone to warning
   if (isStale) {
-    label = `${label} · 已过期`
+    label = `${label} · ${uiText('已过期', 'Stale')}`
     tone = 'warning'
   }
 
@@ -960,6 +937,46 @@ const REASON_LABELS: Record<string, string> = {
   endpoint_reachable_capability_unverified: '入口有响应，但服务能力未核验',
 }
 
+const EN_REASON_LABELS: Record<string, string> = {
+  contract_matched: 'Protocol handshake and response verified',
+  region_mismatch: 'Observed service region differs from the reference exit region',
+  support_unverified: 'Region support not verified against the known official list',
+  antigravity_entry_reachable: 'Official site entry reachable; account and model eligibility unverified',
+  not_executed: 'No outbound probe executed',
+  no_platforms_selected: 'No probe platforms selected',
+  evidence_inconclusive: 'Insufficient or inconclusive evidence',
+  partial_or_abnormal: 'Partial or conflicting observations',
+  detection_failed: 'Probe execution failed',
+  rate_limited: 'Rate limited (429)',
+  overflow: 'Response exceeds the probe safety limit',
+  cancelled: 'Probe run cancelled',
+  budget_not_executed: 'Not executed: run budget exceeded',
+  skipped: 'Execution skipped',
+  control_skip: 'Skipped by control policy',
+  unsafe_tls_rejected: 'Security policy rejected skip_cert_verify',
+  unsafe_option_rejected: 'Security policy rejected unsafe transport or protocol options',
+  private_target_rejected: 'Security policy rejected a private or reserved target address',
+  target_unresolvable: 'Node entry domain could not resolve to a public IP',
+  credentials_unavailable: 'Missing probe credentials or connection parameters; no outbound attempt',
+  probe_dialing_not_configured: 'Probe dialing service is not configured',
+  client_build_failed: 'Probe client could not be created; no outbound attempt',
+  request_build_failed: 'Could not construct the probe request',
+  node_connect_failed: 'Node connection or proxy handshake failed; confirmed unreachable',
+  transport_error: 'Connection or handshake error; failure stage unverified',
+  timeout: 'Probe connection or response timed out',
+  dial_timeout: 'Connection timed out',
+  dns_error: 'DNS resolution failed',
+  dns_resolution_failed: 'DNS resolution failed',
+  tls_handshake_failed: 'TLS handshake failed',
+  access_restricted: 'Service access restricted or verification required',
+  missing_exit_identity: 'Exit IP identity could not be established',
+  speed_opt_in_required: 'Bandwidth testing requires explicit opt-in',
+  speed_budget_exceeded: 'Per-test bandwidth budget exceeded',
+  unexpected_status: 'Unexpected probe response status',
+  contract_drift: 'Response content does not match the probe contract',
+  endpoint_reachable_capability_unverified: 'Entry responded; service capability unverified',
+}
+
 const POLICY_OR_CONFIG_BLOCKED_REASONS = new Set<string>([
   'unsafe_tls_rejected',
   'unsafe_option_rejected',
@@ -977,19 +994,19 @@ export function isPolicyOrConfigBlockedReason(reason?: string): boolean {
 
 export function formatObservationReasonLabel(reason?: string): string {
   if (!reason) return ''
-  return REASON_LABELS[reason] || reason
+  return uiText(REASON_LABELS[reason] || reason, EN_REASON_LABELS[reason] || reason)
 }
 
 export function formatAttemptCategory(category?: string): string {
   if (!category) return ''
   const catMap: Record<string, string> = {
-    control_skip: '控制跳过',
-    budget_exceeded: '超出预算',
-    policy_rejected: '策略拒绝',
-    network_error: '网络故障',
-    protocol_error: '协议错误',
-    detection_failed: '检测失败',
-    contract_mismatch: '契约不符',
+    control_skip: uiText('控制跳过', 'Control skip'),
+    budget_exceeded: uiText('超出预算', 'Budget exceeded'),
+    policy_rejected: uiText('策略拒绝', 'Policy rejected'),
+    network_error: uiText('网络故障', 'Network error'),
+    protocol_error: uiText('协议错误', 'Protocol error'),
+    detection_failed: uiText('检测失败', 'Probe failed'),
+    contract_mismatch: uiText('契约不符', 'Contract mismatch'),
   }
   return catMap[category] || category
 }
@@ -1018,7 +1035,7 @@ export function parseRedactedSummary(summary: string): ParsedSummary {
         break
       case 'reason':
         result.reason = val
-        result.reasonLabel = REASON_LABELS[val] || val
+        result.reasonLabel = formatObservationReasonLabel(val)
         break
       case 'status':
         result.statusCode = parseInt(val, 10) || undefined
@@ -1039,19 +1056,19 @@ export function parseRedactedSummary(summary: string): ParsedSummary {
 
 /** Format relative time from ISO string */
 export function formatRelativeTime(iso: string | null | undefined): string {
-  if (!iso) return '未测速'
+  if (!iso) return uiText('未检测', 'Not probed')
   try {
     const d = new Date(iso)
     const now = Date.now()
     const diffMs = now - d.getTime()
-    if (diffMs < 0) return '即将'
-    if (diffMs < 60_000) return '刚刚'
+    if (diffMs < 0) return uiText('即将', 'Soon')
+    if (diffMs < 60_000) return uiText('刚刚', 'Just now')
     const mins = Math.floor(diffMs / 60_000)
-    if (mins < 60) return `${mins} 分钟前`
+    if (mins < 60) return uiText(`${mins} 分钟前`, `${mins} min ago`)
     const hrs = Math.floor(mins / 60)
-    if (hrs < 24) return `${hrs} 小时前`
+    if (hrs < 24) return uiText(`${hrs} 小时前`, `${hrs} h ago`)
     const days = Math.floor(hrs / 24)
-    return `${days} 天前`
+    return uiText(`${days} 天前`, `${days} d ago`)
   } catch {
     return iso
   }

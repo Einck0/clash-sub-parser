@@ -1,6 +1,7 @@
 import type { ToastTone } from '../../ui/toast'
 import { displayName, displayText } from '../../utils/displayNames'
 import type { CompilerTarget } from '../publications/publicationTypes'
+import { uiText } from '../../locales/redesign'
 import {
   type PlatformCapability,
   type PlatformSubTier,
@@ -199,8 +200,8 @@ export function nodeSupportedTargets(node: NormalizedNode): readonly CompilerTar
 
 export function nodeTargetDiagnostics(node: NormalizedNode): string[] {
   return Object.entries(node.targetCompatibility ?? {})
-    .filter(([, capability]) => capability.status !== 'compatible')
-    .map(([target, capability]) => `${target}: ${displayText(capability.diagnostics?.map((d) => d.message).join('; ') || '不兼容')}`)
+    .filter(([, capability]) => capability && capability.status !== 'compatible')
+    .map(([target, capability]) => `${target}: ${displayText(capability?.diagnostics?.map((d) => d.message).join('; ') || uiText('不兼容', 'Incompatible'))}`)
 }
 
 export interface NodeHealthDiagnostic {
@@ -286,8 +287,9 @@ export function protocolSupportedTargets(protocol: string): readonly CompilerTar
     case 'anytls':
       return ['mihomo']
     case 'vless':
-    default:
       return ['mihomo', 'singbox']
+    default:
+      return []
   }
 }
 
@@ -387,34 +389,34 @@ export function validateNodeConnectionProfile(
 ): string | null {
   const proto = protocol.trim().toLowerCase()
   if (!draft.server || !draft.server.trim()) {
-    return '服务器地址不能为空'
+    return uiText('服务器地址不能为空', 'Server address is required')
   }
   if (!draft.port || draft.port < 1 || draft.port > 65535) {
-    return '端口必须在 1 到 65535 之间'
+    return uiText('端口必须在 1 到 65535 之间', 'Port must be between 1 and 65535')
   }
 
   if (proto === 'wireguard') {
     const addrs = (draft.localAddress ?? []).map((a) => a.trim()).filter(Boolean)
     if (addrs.length === 0) {
-      return 'WireGuard 至少需要配置一个内网地址 (local_address，IPv4/IPv6 CIDR)'
+      return uiText('WireGuard 至少需要配置一个内网地址 (local_address，IPv4/IPv6 CIDR)', 'WireGuard requires at least one local address (local_address, IPv4/IPv6 CIDR)')
     }
     if (!draft.publicKey || !draft.publicKey.trim()) {
-      return 'WireGuard 需要配置对端公钥 (public_key)'
+      return uiText('WireGuard 需要配置对端公钥 (public_key)', 'WireGuard requires a peer public key (public_key)')
     }
     if (!draft.privateKey || !draft.privateKey.trim()) {
-      return 'WireGuard 需要配置客户端私钥 (private_key)'
+      return uiText('WireGuard 需要配置客户端私钥 (private_key)', 'WireGuard requires a client private key (private_key)')
     }
     if (draft.mtu !== undefined && draft.mtu !== 0 && (draft.mtu < 576 || draft.mtu > 9000)) {
-      return 'WireGuard MTU 必须在 576 到 9000 之间'
+      return uiText('WireGuard MTU 必须在 576 到 9000 之间', 'WireGuard MTU must be between 576 and 9000')
     }
   }
 
   if (proto === 'tuic') {
     if (!draft.uuid || !draft.uuid.trim()) {
-      return 'TUIC 需要配置 UUID (uuid)'
+      return uiText('TUIC 需要配置 UUID (uuid)', 'TUIC requires a UUID (uuid)')
     }
     if (!draft.password || !draft.password.trim()) {
-      return 'TUIC 需要配置认证密码 (password)'
+      return uiText('TUIC 需要配置认证密码 (password)', 'TUIC requires an authentication password (password)')
     }
   }
 
@@ -427,7 +429,8 @@ export function renderNodePreview(
 ): string {
   const capability = node.targetCompatibility?.[target]
   if (node.targetCompatibility && capability?.status !== 'compatible') {
-    return `不参与 ${target} 导出: ${displayText(capability?.diagnostics?.map((d) => d.message).join('; ') || (capability ? '目标不兼容' : '后端未提供该目标兼容状态'))}`
+    const reason = displayText(capability?.diagnostics?.map((d) => d.message).join('; ') || (capability ? uiText('目标不兼容', 'Incompatible target') : uiText('后端未提供该目标兼容状态', 'The server did not provide compatibility status for this target')))
+    return uiText(`不参与 ${target} 导出: ${reason}`, `Excluded from ${target} export: ${reason}`)
   }
   const proto = node.protocol.trim().toLowerCase()
   const conn = node.connection
@@ -667,7 +670,7 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
   return {
     logicalId,
     protocol: node.protocol,
-    displayName: displayName(rawDisplayName, '未命名节点', logicalId),
+    displayName: displayName(rawDisplayName, uiText('未命名节点', 'Unnamed node'), logicalId),
     active: node.active,
     connectionRevision: node.connection_revision ?? (node as any).connectionRevision,
     createdAt: node.created_at,
@@ -687,20 +690,23 @@ export function normalizeNode(node: NodeRecord): NormalizedNode {
   }
 }
 
-const capabilityLabels: Record<CapabilityStatus, { label: string; tone: ToastTone }> = {
-  available: { label: '可用', tone: 'success' },
-  abnormal: { label: '异常', tone: 'warning' },
-  restricted: { label: '受限', tone: 'warning' },
-  unknown: { label: '未知', tone: 'info' },
-  error: { label: '检测失败', tone: 'error' },
-  skipped: { label: '未执行', tone: 'info' },
-  stale: { label: '已过期', tone: 'warning' },
-  missing: { label: '未探测', tone: 'info' },
+function capabilityLabels(): Record<CapabilityStatus, { label: string; tone: ToastTone }> {
+  return {
+    available: { label: uiText('可用', 'Available'), tone: 'success' },
+    abnormal: { label: uiText('异常', 'Abnormal'), tone: 'warning' },
+    restricted: { label: uiText('受限', 'Restricted'), tone: 'warning' },
+    unknown: { label: uiText('未知', 'Unknown'), tone: 'info' },
+    error: { label: uiText('检测失败', 'Probe failed'), tone: 'error' },
+    skipped: { label: uiText('未执行', 'Not run'), tone: 'info' },
+    stale: { label: uiText('已过期', 'Stale'), tone: 'warning' },
+    missing: { label: uiText('未探测', 'Not probed'), tone: 'info' },
+  }
 }
 
 export function nodeCapabilityLabel(node: NodeRecord | NormalizedNode, capability: string) {
   const verdict = extractCapabilityVerdict(node.capabilities?.[capability])
-  return capabilityLabels[verdict ?? 'unknown'] ?? capabilityLabels.unknown
+  const labels = capabilityLabels()
+  return labels[verdict ?? 'unknown'] ?? labels.unknown
 }
 
 function hasNodeId(collection: Set<string> | Iterable<string> | undefined, id: string): boolean {
@@ -776,32 +782,32 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
   if (reason === 'unsafe_tls_rejected') {
     return {
       code: 'unsafe_tls_rejected',
-      shortLabel: '安全拒绝：跳过证书校验',
-      detail: '探针安全策略拒绝：节点启用了跳过 TLS 证书校验 (skip_cert_verify)，零出站拦截，不代表线路网络瘫痪',
+      shortLabel: uiText('安全拒绝：跳过证书校验', 'Security rejection: TLS verification skipped'),
+      detail: uiText('探针安全策略拒绝：节点启用了跳过 TLS 证书校验 (skip_cert_verify)，零出站拦截，不代表线路网络瘫痪', 'Probe security policy rejected skip_cert_verify. No outbound connection was attempted; this does not indicate a network outage.'),
       isBlockedByPolicyOrConfig: true,
     }
   }
   if (reason === 'unsafe_option_rejected') {
     return {
       code: 'unsafe_option_rejected',
-      shortLabel: '安全拒绝：不安全协议选项',
-      detail: '探针安全策略拒绝：节点包含未验证端口跳跃或禁用 SNI 等不安全参数，零出站拦截，不代表线路故障',
+      shortLabel: uiText('安全拒绝：不安全协议选项', 'Security rejection: unsafe protocol options'),
+      detail: uiText('探针安全策略拒绝：节点包含未验证端口跳跃或禁用 SNI 等不安全参数，零出站拦截，不代表线路故障', 'Probe security policy rejected unsafe options such as unverified port hopping or disabled SNI. No outbound connection was attempted; this does not indicate a connection outage.'),
       isBlockedByPolicyOrConfig: true,
     }
   }
   if (reason === 'private_target_rejected') {
     return {
       code: 'private_target_rejected',
-      shortLabel: '安全拒绝：私有目标地址',
-      detail: '探针安全策略拒绝：目标地址属于内网或保留网段 (private_target_rejected)，零出站拦截，不代表线路故障',
+      shortLabel: uiText('安全拒绝：私有目标地址', 'Security rejection: private target address'),
+      detail: uiText('探针安全策略拒绝：目标地址属于内网或保留网段 (private_target_rejected)，零出站拦截，不代表线路故障', 'Probe security policy rejected a private or reserved target (private_target_rejected). No outbound connection was attempted; this does not indicate a connection outage.'),
       isBlockedByPolicyOrConfig: true,
     }
   }
   if (reason === 'credentials_unavailable') {
     return {
       code: 'credentials_unavailable',
-      shortLabel: '凭据缺失 / 待核验',
-      detail: '探针未能读取完整连接凭据或必要协议参数 (credentials_unavailable)，未完成出站检测，不代表线路网络瘫痪',
+      shortLabel: uiText('凭据缺失 / 待核验', 'Missing credentials / pending verification'),
+      detail: uiText('探针未能读取完整连接凭据或必要协议参数 (credentials_unavailable)，未完成出站检测，不代表线路网络瘫痪', 'The probe could not read complete credentials or required protocol parameters (credentials_unavailable). Outbound probing was not completed; this does not indicate a network outage.'),
       isBlockedByPolicyOrConfig: true,
     }
   }
@@ -812,64 +818,64 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
   ) {
     return {
       code: reason,
-      shortLabel: '探针构建失败',
-      detail: '探针客户端构建失败 (client_build_failed)：协议或传输参数暂不兼容，未完成出站检测，不代表线路网络瘫痪',
+      shortLabel: uiText('探针构建失败', 'Probe client build failed'),
+      detail: uiText('探针客户端构建失败 (client_build_failed)：协议或传输参数暂不兼容，未完成出站检测，不代表线路网络瘫痪', 'Probe client build failed (client_build_failed): protocol or transport parameters are incompatible. Outbound probing was not completed; this does not indicate a network outage.'),
       isBlockedByPolicyOrConfig: true,
     }
   }
   if (reason === 'target_unresolvable') {
     return {
       code: 'target_unresolvable',
-      shortLabel: '入口域名无法解析',
-      detail: '节点入口域名 DNS 解析失败 (target_unresolvable)，无法建立探测连接',
+      shortLabel: uiText('入口域名无法解析', 'Endpoint hostname cannot be resolved'),
+      detail: uiText('节点入口域名 DNS 解析失败 (target_unresolvable)，无法建立探测连接', 'Endpoint DNS resolution failed (target_unresolvable). A probe connection could not be established.'),
       isBlockedByPolicyOrConfig: false,
     }
   }
   if (reason === 'transport_error') {
     return {
       code: 'transport_error',
-      shortLabel: '传输异常',
-      detail: '探测传输异常 (transport_error)，连接或握手失败',
+      shortLabel: uiText('传输异常', 'Transport error'),
+      detail: uiText('探测传输异常 (transport_error)，连接或握手失败', 'Probe transport error (transport_error): connection or handshake failed.'),
       isBlockedByPolicyOrConfig: false,
     }
   }
   if (reason === 'timeout' || reason === 'dial_timeout') {
     return {
       code: reason,
-      shortLabel: '探测超时',
-      detail: '探测请求超时，节点代理连接不可达',
+      shortLabel: uiText('探测超时', 'Probe timed out'),
+      detail: uiText('探测请求超时，节点代理连接不可达', 'The probe request timed out. The node proxy connection is unreachable.'),
       isBlockedByPolicyOrConfig: false,
     }
   }
   if (reason === 'dns_error' || reason === 'dns_resolution_failed') {
     return {
       code: reason,
-      shortLabel: 'DNS 解析异常',
-      detail: '探测过程中 DNS 解析异常，无法连接节点',
+      shortLabel: uiText('DNS 解析异常', 'DNS resolution error'),
+      detail: uiText('探测过程中 DNS 解析异常，无法连接节点', 'DNS resolution failed during probing. The node could not be reached.'),
       isBlockedByPolicyOrConfig: false,
     }
   }
   if (reason === 'region_mismatch') {
     return {
       code: 'region_mismatch',
-      shortLabel: '地区异常',
-      detail: '服务观测地区与出口参考地区不一致（非物理路由绝对证明）',
+      shortLabel: uiText('地区异常', 'Region mismatch'),
+      detail: uiText('服务观测地区与出口参考地区不一致（非物理路由绝对证明）', 'The observed service region differs from the reference exit region; this is not definitive evidence of the physical route.'),
       isBlockedByPolicyOrConfig: false,
     }
   }
   if (reason === 'not_executed' || baseDetail?.verdict === 'skipped') {
     return {
       code: reason || 'skipped',
-      shortLabel: '未执行',
-      detail: '探测跳过或未执行出站检测，整体状态保持未知',
+      shortLabel: uiText('未执行', 'Not run'),
+      detail: uiText('探测跳过或未执行出站检测，整体状态保持未知', 'The probe was skipped or did not attempt outbound checks. Overall status remains unknown.'),
       isBlockedByPolicyOrConfig: false,
     }
   }
   if (category === 'unhealthy') {
     return {
       code: reason || 'node_connect_failed',
-      shortLabel: '连接或握手失败',
-      detail: '节点代理连接或握手阶段失败，已证实当前不可达',
+      shortLabel: uiText('连接或握手失败', 'Connection or handshake failed'),
+      detail: uiText('节点代理连接或握手阶段失败，已证实当前不可达', 'The node proxy connection or handshake failed, confirming that it is currently unreachable.'),
       isBlockedByPolicyOrConfig: false,
     }
   }
@@ -879,16 +885,16 @@ export function nodeHealthDiagnostic(node: NodeRecord | NormalizedNode): NodeHea
   if (!baseDetail && capKeys.length > 0) {
     return {
       code: 'baseline_missing',
-      shortLabel: '缺少基础连通观测',
-      detail: '仅有流媒体/AI 等辅助能力记录，缺少有效基础连通性 (baseline) 观测，整体状态待核验',
+      shortLabel: uiText('缺少基础连通观测', 'Missing baseline connectivity evidence'),
+      detail: uiText('仅有流媒体/AI 等辅助能力记录，缺少有效基础连通性 (baseline) 观测，整体状态待核验', 'Only auxiliary streaming or AI capability records exist. Valid baseline connectivity evidence is missing, so overall status is pending verification.'),
       isBlockedByPolicyOrConfig: false,
     }
   }
 
   return {
     code: 'probe_missing',
-    shortLabel: '尚未探测',
-    detail: '尚无探测观测记录，等待 1 分钟增量巡检或手动刷新入池检测',
+    shortLabel: uiText('尚未探测', 'Not probed yet'),
+    detail: uiText('尚无探测观测记录，等待 1 分钟增量巡检或手动刷新入池检测', 'No probe observations yet. Wait for the one-minute incremental check or manually refresh to queue a probe.'),
     isBlockedByPolicyOrConfig: false,
   }
 }
@@ -897,10 +903,10 @@ export function nodeHealthBadge(
   node: NodeRecord | NormalizedNode
 ): { label: string; tone: ToastTone } {
   const category = nodeUnderlyingHealthCategory(node)
-  if (category === 'healthy') return { label: '正常', tone: 'success' }
-  if (category === 'unhealthy') return { label: '异常', tone: 'error' }
+  if (category === 'healthy') return { label: uiText('正常', 'Healthy'), tone: 'success' }
+  if (category === 'unhealthy') return { label: uiText('异常', 'Unhealthy'), tone: 'error' }
 
-  return { label: '未知', tone: 'info' }
+  return { label: uiText('未知', 'Unknown'), tone: 'info' }
 }
 
 export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: string; tone: ToastTone } {
@@ -915,12 +921,12 @@ export function nodeRiskBadge(node: NodeRecord | NormalizedNode): { label: strin
     const validSuffix = parts.length === 1 || (parts.length === 2 && (label === '' || /^[\t\n\v\f\r ]/.test(label)))
     if (validSuffix && /^(0|[1-9]\d?|100)$/.test(score)) {
       const num = Number(score)
-      if (num < 25) return { label: `低风险 (${score})`, tone: 'success' }
-      if (num < 65) return { label: `中风险 (${score})`, tone: 'warning' }
-      return { label: `高风险 (${score})`, tone: 'error' }
+      if (num < 25) return { label: uiText(`低风险 (${score})`, `Low risk (${score})`), tone: 'success' }
+      if (num < 65) return { label: uiText(`中风险 (${score})`, `Medium risk (${score})`), tone: 'warning' }
+      return { label: uiText(`高风险 (${score})`, `High risk (${score})`), tone: 'error' }
     }
   }
-  return { label: '风险未知', tone: 'info' }
+  return { label: uiText('风险未知', 'Unknown risk'), tone: 'info' }
 }
 
 export function formatExpandedPlatformLabel(badge: PlatformBadge): string {

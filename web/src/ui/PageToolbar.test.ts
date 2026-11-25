@@ -55,6 +55,8 @@ describe('PageToolbar Component', () => {
 
     const desc = container.querySelector('[data-testid="toolbar-description"]')
     expect(desc?.textContent?.trim()).toBe('Overview of all node probes and protocols')
+    expect(desc?.classList.contains('truncate')).toBe(false)
+    expect(container.querySelector('[data-testid="toolbar-actions"]')?.classList.contains('flex-wrap')).toBe(true)
 
     // Verify slots
     expect(container.querySelector('[data-testid="search-input"]')).toBeTruthy()

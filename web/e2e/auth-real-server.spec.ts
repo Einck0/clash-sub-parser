@@ -302,17 +302,15 @@ test.describe('Real Go Server E2E: Adversarial Case 2 - Open Mode Clean Baseline
     await context.clearCookies()
     await page.goto(openServerUrl)
 
-    const themeBtn = page.locator('header [aria-label="Toggle Theme"]')
-    if (await themeBtn.isVisible()) {
-      await themeBtn.click()
-      const cyberpunkOption = page.locator('.dropdown-content button:has-text("cyberpunk")')
-      if (await cyberpunkOption.isVisible()) {
-        await cyberpunkOption.click()
-        await expect(page.locator('html')).toHaveAttribute('data-theme', 'cyberpunk')
-        await page.reload()
-        await expect(page.locator('html')).toHaveAttribute('data-theme', 'cyberpunk')
-      }
-    }
+    const themeBtn = page.locator('header [data-testid="theme-toggle"]')
+    await expect(themeBtn).toBeVisible()
+    await themeBtn.click()
+    const cyberpunkOption = page.getByRole('menuitemradio', { name: /cyberpunk|赛博朋克/i })
+    await expect(cyberpunkOption).toBeVisible()
+    await cyberpunkOption.click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'cyberpunk')
+    await page.reload()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'cyberpunk')
   })
 
   test('375px viewport has zero horizontal overflow and preserves interactive header controls', async ({ page, context }) => {
@@ -328,7 +326,7 @@ test.describe('Real Go Server E2E: Adversarial Case 2 - Open Mode Clean Baseline
     const healthRefreshBtn = page.locator('header .header-health-indicator button, header button[aria-label="Refresh health"], header button[aria-label="刷新健康检测"]')
     await expect(healthRefreshBtn).toBeVisible()
 
-    const themeBtn = page.locator('header [aria-label="Toggle Theme"]')
+    const themeBtn = page.locator('header [data-testid="theme-toggle"]')
     await expect(themeBtn).toBeVisible()
 
     // 2. In modern architecture, clicking authBadge navigates to settings view (no popup modal)

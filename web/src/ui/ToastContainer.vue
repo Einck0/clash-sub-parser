@@ -7,6 +7,7 @@ import {
   InformationCircleIcon,
   XMarkIcon,
 } from '@heroicons/vue/24/outline'
+import { uiText } from '../locales'
 import { toastStore, type ToastTone } from './toast'
 
 const items = computed(() => toastStore.items.value)
@@ -22,7 +23,7 @@ const toneBorder: Record<ToastTone, string> = {
 <template>
   <div
     v-if="items.length > 0"
-    class="fixed bottom-20 md:bottom-6 right-4 sm:right-6 z-[9999] flex flex-col gap-2.5 max-w-sm w-full pointer-events-none"
+    class="csp-toast-stack fixed bottom-[max(6rem,calc(5rem+env(safe-area-inset-bottom,0px)))] md:bottom-6 right-4 sm:right-6 z-[9999] flex flex-col gap-2.5 pointer-events-none"
     aria-live="polite"
     aria-atomic="false"
   >
@@ -54,7 +55,7 @@ const toneBorder: Record<ToastTone, string> = {
           <p v-if="toast.title" class="font-bold text-xs uppercase tracking-wider text-base-content">
             {{ toast.title }}
           </p>
-          <p class="text-xs sm:text-sm text-base-content/90 font-medium break-words leading-relaxed">
+          <p class="text-sm text-base-content/90 font-medium break-words [overflow-wrap:anywhere] leading-relaxed">
             {{ toast.message }}
           </p>
         </div>
@@ -63,7 +64,7 @@ const toneBorder: Record<ToastTone, string> = {
         <button
           type="button"
           class="btn btn-ghost btn-circle btn-xs text-base-content/50 hover:text-base-content shrink-0"
-          aria-label="Dismiss notification"
+          :aria-label="uiText('关闭通知', 'Dismiss notification')"
           @click="toastStore.remove(toast.id)"
         >
           <XMarkIcon class="w-4 h-4" />

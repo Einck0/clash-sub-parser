@@ -48,7 +48,7 @@ function clearSearch() {
 </script>
 
 <template>
-  <PageToolbar :title="t('rules.title')" sr-only-title>
+  <PageToolbar :title="t('rules.title')" :description="uiText('查找、排序和启停路由规则。停用项保留在此处，但不参与实际导出。', 'Find, order and toggle routing rules. Disabled rules stay editable here but are excluded from exports.')">
     <!-- Default Slot: Search & Small Counts in one cohesive bar -->
     <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full max-w-xl">
       <!-- Search Input -->
@@ -96,11 +96,15 @@ function clearSearch() {
 
     <!-- Actions Slot: Main Action Prominent + More Dropdown -->
     <template #actions>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <button type="button" class="btn btn-sm btn-outline gap-1.5" :disabled="validating || loading" @click="$emit('validate-rules')">
+          <ShieldCheckIcon class="w-4 h-4" />{{ t('rules.validateRules') }}
+        </button>
         <!-- Prominent Primary Action: New Rule -->
         <button
           type="button"
           class="btn btn-sm btn-primary gap-1.5 shadow-xs"
+          :disabled="saving || loading"
           @click="$emit('new-rule')"
         >
           <PlusIcon class="w-4 h-4" />
@@ -122,17 +126,6 @@ function clearSearch() {
             tabindex="0"
             class="dropdown-content z-20 menu p-1.5 shadow-lg bg-base-100 rounded-box border border-base-300/60 w-52 text-xs space-y-0.5"
           >
-            <li>
-              <button
-                type="button"
-                :disabled="validating"
-                class="flex items-center gap-2 py-2"
-                @click="$emit('validate-rules')"
-              >
-                <ShieldCheckIcon class="w-4 h-4 text-success" />
-                <span>{{ t('rules.validateRules') }}</span>
-              </button>
-            </li>
             <li>
               <button
                 type="button"

@@ -74,6 +74,7 @@ describe('useDnsDraft', () => {
           enabled: body.enabled !== undefined ? body.enabled : mockSettings.enabled,
           raw_yaml: body.raw_yaml,
           revision: mockSettings.revision + 1,
+          config: { ...(yaml.load(body.raw_yaml) as Record<string, unknown>), enable: body.enabled },
         }
         return { ...mockSettings }
       }
@@ -84,6 +85,188 @@ describe('useDnsDraft', () => {
   afterEach(() => {
     setLocale('zh-CN')
     vi.restoreAllMocks()
+  })
+
+  it('keeps the page uninitialized and blocks save after the initial read fails', async () => {
+    const draft = useDnsDraft()
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('DNS settings unavailable'))
+
+    await draft.load(true)
+    await draft.save()
+
+    expect(draft.settings.value).toBeNull()
+    expect(draft.error.value).toContain('DNS settings unavailable')
+    expect(draft.dirty.value).toBe(false)
+    expect(api.put).not.toHaveBeenCalled()
+  })
+
+  it('preserves unknown own keys named __proto__ when cloning and editing the draft', async () => {
+    const draft = useDnsDraft()
+    const config = JSON.parse('{"__proto__":{"kept":true},"listen":"0.0.0.0:1053"}')
+    draft.apply({ ...mockSettings, config })
+
+    expect(Object.hasOwn(draft.draft.value, '__proto__')).toBe(true)
+    expect((draft.draft.value['__proto__'] as Record<string, unknown>).kept).toBe(true)
+    draft.setString('listen', '127.0.0.1:5353')
+    expect(Object.hasOwn(draft.draft.value, '__proto__')).toBe(true)
+    expect((draft.draft.value['__proto__'] as Record<string, unknown>).kept).toBe(true)
+    expect(serializeDraftToYaml(draft.draft.value, true)).toContain('__proto__:')
+  })
+
+  it('retries only the read-back after an accepted write instead of repeating PUT', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+    draft.setString('listen', '127.0.0.1:5353')
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('confirmation network unavailable'))
+
+    await draft.save()
+
+    expect(api.put).toHaveBeenCalledTimes(1)
+    expect(draft.saveNeedsConfirmation.value).toBe(true)
+    expect(draft.settings.value?.revision).toBe(6)
+    expect(draft.dirty.value).toBe(true)
+    expect(draft.error.value).toContain('确认保存结果')
+
+    await draft.save()
+
+    expect(api.put).toHaveBeenCalledTimes(1)
+    expect(draft.saveNeedsConfirmation.value).toBe(false)
+    expect(draft.settings.value?.revision).toBe(6)
+    expect(draft.dirty.value).toBe(false)
+  })
+
+  it('keeps the original revision on 409 and pauses writes until the latest config is reloaded', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+    draft.setString('listen', '127.0.0.1:5353')
+    vi.mocked(api.put).mockRejectedValueOnce(
+      Object.assign(new Error('revision mismatch'), { status: 409, name: 'ApiError' })
+    )
+
+    await draft.save()
+
+    expect(draft.settings.value?.revision).toBe(5)
+    expect(draft.getString('listen')).toBe('127.0.0.1:5353')
+    expect(draft.saveConflict.value).toBe(true)
+    expect(draft.dirty.value).toBe(true)
+    await draft.save()
+    expect(api.put).toHaveBeenCalledTimes(1)
+
+    mockSettings = {
+      ...mockSettings,
+      revision: 6,
+      raw_yaml: 'listen: 192.0.2.53:53\n',
+      config: { listen: '192.0.2.53:53' },
+    }
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(true)
+    await draft.load(false)
+    expect(draft.settings.value?.revision).toBe(6)
+    expect(draft.getString('listen')).toBe('192.0.2.53:53')
+    expect(draft.saveConflict.value).toBe(false)
+  })
+
+  it('does not mark an unchanged visual/raw round trip dirty just because YAML was normalized', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+
+    await draft.switchMode('raw')
+    expect(draft.raw.value).toContain('extra_nested:')
+    expect(draft.dirty.value).toBe(false)
+    await draft.switchMode('visual')
+    expect(draft.draft.value['extra_nested']).toEqual(mockSettings.config['extra_nested'])
+    expect(draft.dirty.value).toBe(false)
+  })
+
+  it('preserves unparsed raw YAML and the last visual draft when validation rejects a switch', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+    await draft.switchMode('raw')
+    const visual = serializeDraftToYaml(draft.draft.value, draft.enabled.value)
+    const invalidRaw = 'nameserver: [\n  unfinished'
+    draft.onRawInput(invalidRaw)
+    vi.mocked(api.post).mockRejectedValueOnce(new Error('DNS configuration must be valid YAML'))
+
+    await draft.switchMode('visual')
+
+    expect(draft.mode.value).toBe('raw')
+    expect(draft.raw.value).toBe(invalidRaw)
+    expect(draft.dirty.value).toBe(true)
+    expect(serializeDraftToYaml(draft.draft.value, draft.enabled.value)).toBe(visual)
+    expect(api.put).not.toHaveBeenCalled()
+  })
+
+  it('retains draft and known revision when reload fails', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+    draft.setString('listen', '127.0.0.1:5353')
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(true)
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('reload unavailable'))
+
+    await draft.load(false)
+
+    expect(draft.settings.value?.revision).toBe(5)
+    expect(draft.getString('listen')).toBe('127.0.0.1:5353')
+    expect(draft.dirty.value).toBe(true)
+    expect(draft.error.value).toContain('reload unavailable')
+  })
+
+  it('does not apply a different server revision returned after a successful write', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+    draft.setString('listen', '127.0.0.1:5353')
+    vi.mocked(api.get).mockResolvedValueOnce(createMockSettings({
+      revision: 7,
+      config: { enable: true, listen: '192.0.2.53:53' },
+    }))
+
+    await draft.save()
+
+    expect(draft.settings.value?.revision).toBe(6)
+    expect(draft.getString('listen')).toBe('127.0.0.1:5353')
+    expect(draft.notice.value).toBe('')
+    expect(draft.saveConflict.value).toBe(true)
+    expect(draft.dirty.value).toBe(true)
+    expect(draft.error.value).toContain('revision 7')
+  })
+
+  it('keeps newer draft edits when confirming a previous write, then saves them against its actual revision', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+    draft.setString('listen', '127.0.0.1:5353')
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('read-back failed'))
+    await draft.save()
+
+    draft.setString('listen', '127.0.0.1:8053')
+    await draft.save()
+
+    expect(api.put).toHaveBeenCalledTimes(1)
+    expect(draft.getString('listen')).toBe('127.0.0.1:8053')
+    expect(draft.dirty.value).toBe(true)
+    expect(draft.saveNeedsConfirmation.value).toBe(false)
+    expect(draft.settings.value?.revision).toBe(6)
+
+    await draft.save()
+    expect(api.put).toHaveBeenLastCalledWith('/api/v1/settings/dns', expect.objectContaining({
+      expected_revision: 6,
+      raw_yaml: expect.stringContaining('127.0.0.1:8053'),
+    }))
+    expect(draft.settings.value?.revision).toBe(7)
+    expect(draft.dirty.value).toBe(false)
+  })
+
+  it('uses the server-normalized preview without mutating the source draft', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+    draft.setString('listen', '127.0.0.1:5353')
+    const before = serializeDraftToYaml(draft.draft.value, draft.enabled.value)
+    const normalized = 'enable: true\nlisten: 127.0.0.1:5353\n'
+    vi.mocked(api.post).mockResolvedValueOnce({ raw_yaml: normalized, config: {} })
+
+    await draft.preview()
+
+    expect(draft.previewYaml.value).toBe(normalized)
+    expect(serializeDraftToYaml(draft.draft.value, draft.enabled.value)).toBe(before)
+    expect(draft.dirty.value).toBe(true)
   })
 
   it('initializes and loads settings from server, initially clean', async () => {
@@ -244,6 +427,31 @@ describe('useDnsDraft', () => {
     expect(draft.draft.value['nameserver-policy']).toEqual({
       'geosite:google': ['8.8.8.8', '8.8.4.4'],
     })
+  })
+
+  it('keeps date-like values in a mapping as scalar text rather than serializing them to empty objects', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+
+    expect(draft.setYamlMappingText('fallback-filter', 'observed: 2026-11-25')).toBe(true)
+    expect(draft.draft.value['fallback-filter']).toEqual({ observed: '2026-11-25' })
+    expect(serializeDraftToYaml(draft.draft.value, true)).toContain('2026-11-25')
+    expect(draft.getYamlMappingText('fallback-filter')).not.toContain('{}')
+  })
+
+  it('retains recursive YAML as invalid input rather than storing a draft that cannot be serialized', async () => {
+    const draft = useDnsDraft()
+    await draft.load(true)
+    const previous = draft.getYamlMappingText('nameserver-policy')
+    const recursive = 'recursive: &cycle\n  next: *cycle'
+
+    expect(draft.setYamlMappingText('nameserver-policy', recursive)).toBe(false)
+    expect(draft.getYamlMappingText('nameserver-policy')).toBe(recursive)
+    expect(draft.hasValidationErrors.value).toBe(true)
+    expect(draft.draft.value['nameserver-policy']).toEqual(yaml.load(previous))
+    await draft.preview()
+    expect(api.post).not.toHaveBeenCalled()
+    expect(draft.previewing.value).toBe(false)
   })
 
   it('rejects YAML non-mapping inputs: array, null, scalar strings/numbers', async () => {

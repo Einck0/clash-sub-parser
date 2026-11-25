@@ -93,7 +93,7 @@ export const router = createRouter({
 // Synchronize route state with navigation storage
 router.afterEach((to) => {
   const tabName = to.name ? String(to.name) : 'dashboard'
-  if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+  if (typeof window !== 'undefined') {
     try {
       window.localStorage.setItem(ROUTE_STORAGE_KEY, tabName)
     } catch {

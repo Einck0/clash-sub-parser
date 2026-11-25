@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
+import { RouterLink, useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import PageToolbar from '../../ui/PageToolbar.vue'
-import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
+import { provideSettingsDrafts } from './useSettingsDraft'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
 import PublicBaseUrlSettings from './PublicBaseUrlSettings.vue'
@@ -15,8 +16,6 @@ import { useAuthSettings } from './useAuthSettings'
 
 export type SettingsCategory = 'connection' | 'probe' | 'filter' | 'security' | 'display'
 
-const activeCategory = ref<SettingsCategory>('connection')
-
 const categories: { id: SettingsCategory; labelZh: string; labelEn: string }[] = [
   { id: 'connection', labelZh: '连接与订阅', labelEn: 'Connection & Subscription' },
   { id: 'probe', labelZh: '节点检测', labelEn: 'Node Detection' },
@@ -25,14 +24,29 @@ const categories: { id: SettingsCategory; labelZh: string; labelEn: string }[] =
   { id: 'display', labelZh: '外观与偏好', labelEn: 'Display & Preferences' },
 ]
 
-const auth = useAuthSettings()
+const route = useRoute()
+const router = useRouter()
+const draftRegistry = provideSettingsDrafts()
+const draftsDirty = draftRegistry.dirty
+const activeCategory = computed<SettingsCategory>(() => {
+  const section = route?.query.section
+  return categories.some(category => category.id === section) ? section as SettingsCategory : 'connection'
+})
+function categoryLocation(section: SettingsCategory) {
+  return { path: '/settings', query: { ...route?.query, section } as LocationQueryRaw }
+}
+function selectCategory(event: Event) {
+  const select = event.target as HTMLSelectElement
+  const category = select.value as SettingsCategory
+  // The router is the source of truth, including rejected/cancelled navigation.
+  select.value = activeCategory.value
+  void router.push(categoryLocation(category))
+}
 
-useUnsavedChanges(auth.isDirty, () =>
-  uiText(
-    '当前设置项有未保存的修改，离开将丢失这些草稿。确定要离开吗？',
-    'You have unsaved changes in Settings. Leaving will discard drafts. Are you sure?'
-  )
-)
+const auth = useAuthSettings((dirty) => !draftRegistry.hasOtherDrafts(dirty) || window.confirm(uiText(
+  '认证设置保存成功后将重新连接控制台，其他分区的未保存草稿会丢失。确定继续吗？',
+  'Saving authentication reconnects the console and discards unsaved drafts in other sections. Continue?'
+)))
 
 onMounted(() => {
   auth.syncStoredToken()
@@ -41,11 +55,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="space-y-6" data-testid="settings-view">
-    <h2 class="sr-only">{{ t('settings.title') }}</h2>
-
+  <div class="space-y-6" data-testid="settings-view" :aria-busy="auth.isSavingSwitches.value || auth.isSavingToken.value || auth.isClearingToken.value">
     <!-- PageToolbar & Auth Mode Status Badge -->
-    <PageToolbar :title="t('settings.title')" :description="t('settings.subtitle')" sr-only-title>
+    <PageToolbar :title="t('settings.title')" :description="t('settings.subtitle')">
       <template #default>
         <div class="flex items-center gap-2">
           <span class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{{ t('settings.tag') }}</span>
@@ -98,7 +110,8 @@ onMounted(() => {
       <label class="sr-only" for="settings-category-select">{{ uiText('设置分类', 'Settings Category') }}</label>
       <select
         id="settings-category-select"
-        v-model="activeCategory"
+        :value="activeCategory"
+        @change="selectCategory"
         class="select select-sm w-full font-medium bg-base-200/80"
         data-testid="settings-category-select"
       >
@@ -108,21 +121,24 @@ onMounted(() => {
       </select>
     </div>
 
-    <div class="hidden sm:flex items-center gap-1.5 border-b border-base-300 pb-2">
-      <button
+    <nav class="hidden sm:flex flex-wrap items-center gap-1.5 border-b border-base-300 pb-2" :aria-label="uiText('设置分类', 'Settings categories')">
+      <RouterLink
         v-for="cat in categories"
         :key="cat.id"
-        type="button"
-        class="btn btn-sm touch-manipulation transition-all"
+        :to="categoryLocation(cat.id)"
+        :aria-current="activeCategory === cat.id ? 'page' : undefined"
         :class="activeCategory === cat.id ? 'btn-primary shadow-sm font-semibold' : 'btn-ghost text-base-content/70 hover:text-base-content'"
+        class="btn btn-sm touch-manipulation transition-all"
         :data-testid="`settings-tab-${cat.id}`"
-        @click="activeCategory = cat.id"
       >
         {{ uiText(cat.labelZh, cat.labelEn) }}
-      </button>
-    </div>
+      </RouterLink>
+    </nav>
 
-    <!-- 1. Connection & Subscription Panel -->
+    <p v-if="draftsDirty" class="text-xs text-warning" role="status" data-testid="settings-unsaved-summary">{{ uiText('有未保存的设置。切换分区会保留草稿，离开设置或刷新页面前请保存。', 'Unsaved settings. Switching sections keeps drafts; save before leaving Settings or refreshing.') }}</p>
+
+    <fieldset :disabled="auth.isSavingSwitches.value || auth.isSavingToken.value || auth.isClearingToken.value" class="space-y-6 min-w-0">
+    <!-- Keep panels mounted: query/back navigation must not discard hidden drafts. -->
     <div v-show="activeCategory === 'connection'" class="space-y-6" data-testid="settings-panel-connection">
       <PublicBaseUrlSettings />
       <SubscriptionFetchSettings />
@@ -161,5 +177,6 @@ onMounted(() => {
     <div v-show="activeCategory === 'display'" class="space-y-6" data-testid="settings-panel-display">
       <AppearanceSettings />
     </div>
+    </fieldset>
   </div>
 </template>

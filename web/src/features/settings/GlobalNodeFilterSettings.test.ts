@@ -5,6 +5,7 @@ import GlobalNodeFilterSettings from './GlobalNodeFilterSettings.vue'
 import { api, ApiError } from '../../api/client'
 import { setLocale } from '../../locales'
 import PolicyView from '../policy/PolicyView.vue'
+import { SUPPORTED_PROBE_VERDICTS, validateConditionInput, type FilterCondition } from '../policy/policyTypes'
 
 const endpoint = '/api/v1/policies/global-node-filter'
 const baseline = { spec: { conditions: [{ field: 'probe_verdict', op: 'equals', value: 'available', probe_kind: 'baseline', freshness_seconds: 3600 }] }, updated_at: '2026-01-01T00:00:00Z' }
@@ -81,6 +82,7 @@ describe('global export filter settings', () => {
   })
 
   it('supports all domain fields and en-US labels, restores server values after refresh', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     setLocale('en-US'); mount(); await flush()
     const field = conditions()[0]!.querySelector('select[aria-label="Field"]') as HTMLSelectElement
     expect([...field.options].map((o) => o.value)).toEqual([
@@ -105,6 +107,7 @@ describe('global export filter settings', () => {
     input(conditions()[0]!.querySelector('input[aria-label="Value"]')!, 'My node'); await flush()
     expect(root.textContent).toContain('Unsaved changes')
     button('filter-refresh').click(); await flush()
+    expect(confirm).toHaveBeenCalledOnce()
     expect((conditions()[0]!.querySelector('select[aria-label="Field"]') as HTMLSelectElement).value).toBe('probe_verdict')
     expect(root.textContent).not.toContain('Unsaved changes')
   })
@@ -199,6 +202,59 @@ describe('global export filter settings', () => {
     expect(conditions()).toHaveLength(2)
     expect(root.textContent).toContain('未保存的修改')
     expect(find('filter-request-error')?.textContent).toContain('write rejected')
+  })
+
+  it.each(['settings', 'policy'] as const)('preserves supported abnormal/skipped verdicts through the %s editor and saved-config consumer', async entry => {
+    let persisted: FilterCondition[] = [
+      { field: 'probe_verdict', op: 'equals', value: 'abnormal', probe_kind: 'baseline' },
+      { field: 'probe_verdict', op: 'not_equals', value: 'skipped', probe_kind: 'geo' },
+    ]
+    const config = () => ({ spec: { conditions: structuredClone(persisted) }, empty_fallback_pass: true, updated_at: 'now' })
+    const get = vi.spyOn(api, 'get').mockImplementation(async (path: string) => path === endpoint ? config() : { items: [], total: 0 })
+    const put = vi.spyOn(api, 'put').mockImplementation(async (_path, payload: any) => {
+      persisted = structuredClone(payload.spec.conditions)
+      return config()
+    })
+    vi.spyOn(api, 'post').mockResolvedValue({ valid: true })
+    const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); await nextTick() }
+    const open = async () => {
+      if (entry === 'policy') (root.querySelector('[data-testid="global-filter-btn"]') as HTMLButtonElement).click()
+      await settle()
+    }
+    mount(entry === 'policy' ? PolicyView : GlobalNodeFilterSettings)
+    await settle()
+    await open()
+    expect(conditions()).toHaveLength(2)
+    const verdictSelects = () => conditions().map(row => row.querySelector<HTMLSelectElement>('select[aria-label="值"]')!)
+    expect(verdictSelects().map(select => select.value)).toEqual(['abnormal', 'skipped'])
+    expect([...verdictSelects()[0].options].map(option => option.value)).toEqual([...SUPPORTED_PROBE_VERDICTS])
+    const unchanged = structuredClone(persisted)
+    button('filter-save').click()
+    await settle()
+    expect(find('filter-validation-error')).toBeNull()
+    expect(put).toHaveBeenCalledWith(endpoint, { spec: { conditions: unchanged }, empty_fallback_pass: true })
+
+    await open()
+    input(verdictSelects()[0], 'skipped')
+    input(verdictSelects()[1], 'abnormal')
+    await settle()
+    const changed = [
+      { ...unchanged[0], value: 'skipped' },
+      { ...unchanged[1], value: 'abnormal' },
+    ]
+    button('filter-save').click()
+    await settle()
+    expect(put).toHaveBeenLastCalledWith(endpoint, { spec: { conditions: changed }, empty_fallback_pass: true })
+    expect(put).toHaveBeenCalledTimes(2)
+    // Both the settings view and Policy shortcut consume the saved endpoint, without remapping verdicts.
+    app!.unmount(); app = undefined
+    mount(entry === 'policy' ? PolicyView : GlobalNodeFilterSettings)
+    await settle()
+    await open()
+    expect(get).toHaveBeenCalledWith(endpoint)
+    expect(verdictSelects().map(select => select.value)).toEqual(['skipped', 'abnormal'])
+    expect(persisted.map(validateConditionInput)).toEqual([null, null])
+    expect(root.textContent).not.toContain('未保存的修改')
   })
 
   it('keeps the existing Policy page entry and corrects its credential-version claim', async () => {

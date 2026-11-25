@@ -196,4 +196,50 @@ describe('useDashboard composable', () => {
     // Outdated request 1 was discarded, value remains 88
     expect(metrics.value.subscriptions.value).toBe(88)
   })
+
+  it('publishes settled sections before a slower section finishes and keeps initial refresh pending', async () => {
+    let finishRules!: (result: { total: number }) => void
+    vi.spyOn(api, 'get').mockImplementation((path: string) => path === '/api/v1/policies/rules'
+      ? new Promise(resolve => { finishRules = resolve })
+      : Promise.resolve({ total: 7 }))
+    const dashboard = useDashboard()
+    const pending = dashboard.loadStats()
+    expect(dashboard.isRefreshingStats.value).toBe(true)
+    await Promise.resolve()
+    expect(dashboard.metrics.value.subscriptions.value).toBe(7)
+    expect(dashboard.metrics.value.rules.status).toBe('loading')
+    expect(dashboard.isRefreshingStats.value).toBe(true)
+    finishRules({ total: 35 })
+    await pending
+    expect(dashboard.metrics.value.rules.value).toBe(35)
+    expect(dashboard.isRefreshingStats.value).toBe(false)
+  })
+
+  it.each([
+    { total: -1 }, { total: NaN }, { total: Infinity }, { total: 1.2 },
+    { total: '40' }, { items: [{}] }, { policy_rules: [{}] },
+  ])('does not misrepresent an invalid or paginated response as a total: %j', async (payload) => {
+    vi.spyOn(api, 'get').mockResolvedValue(payload)
+    const dashboard = useDashboard()
+    await dashboard.loadStats()
+    expect(dashboard.metrics.value.nodes).toMatchObject({ value: null, status: 'error', isStale: false })
+    expect(dashboard.metrics.value.nodes.error).toContain('total')
+  })
+
+  it('keeps active-subset failures independent of the node total and preserves its stale count', async () => {
+    let failSubset = false
+    vi.spyOn(api, 'get').mockImplementation(async (_path: string, options?: any) => {
+      if (options?.params?.active_only) {
+        if (failSubset) throw new Error('Active subset unavailable')
+        return { total: 12 }
+      }
+      return { total: 50 }
+    })
+    const dashboard = useDashboard()
+    await dashboard.loadStats()
+    failSubset = true
+    await dashboard.loadStats(true)
+    expect(dashboard.metrics.value.nodes).toMatchObject({ value: 50, status: 'success', isStale: false })
+    expect(dashboard.metrics.value.activeNodes).toMatchObject({ value: 12, status: 'error', isStale: true, error: 'Active subset unavailable' })
+  })
 })

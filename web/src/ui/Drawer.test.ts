@@ -89,7 +89,7 @@ describe('Drawer and DrawerCard Components', () => {
     expect(scrollBody.classList.contains('min-h-0')).toBe(true)
     expect(scrollBody.querySelector('.long-content-probe')).toBeTruthy()
 
-    const closeBtn = document.querySelector('button[aria-label="Close drawer"]') as HTMLButtonElement
+    const closeBtn = document.querySelector('button[data-testid="drawer-close"]') as HTMLButtonElement
     expect(closeBtn).toBeTruthy()
     closeBtn.click()
     await nextTick()
@@ -264,7 +264,7 @@ describe('Drawer and DrawerCard Components', () => {
     await nextTick()
 
     const panel = document.querySelector<HTMLElement>('[data-drawer-panel]')!
-    const close = panel.querySelector<HTMLButtonElement>('button[aria-label="Close drawer"]')!
+    const close = panel.querySelector<HTMLButtonElement>('button[data-testid="drawer-close"]')!
     const last = panel.querySelector<HTMLButtonElement>('#keyboard-last')!
     expect(panel.closest('[inert]')).toBeNull()
     expect(Array.from(panel.querySelectorAll('button')).filter((button) => !button.disabled && !button.hidden))
@@ -362,7 +362,7 @@ describe('Drawer and DrawerCard Components', () => {
     app.mount(container)
     await nextTick()
 
-    expect(document.activeElement).toBe(document.querySelector('button[aria-label="Close drawer"]'))
+    expect(document.activeElement).toBe(document.querySelector('button[data-testid="drawer-close"]'))
 
     // Close the drawer
     propsState.modelValue = false

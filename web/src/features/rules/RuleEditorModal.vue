@@ -23,6 +23,7 @@ const props = defineProps<{
   categories: RuleCategory[]
   groups: PolicyGroupSummary[]
   saving: boolean
+  error?: string
 }>()
 
 const emit = defineEmits<{
@@ -119,6 +120,7 @@ try {
 }
 
 function handleClose() {
+  if (props.saving) return
   if (unsavedGuard && typeof unsavedGuard.confirmDiscard === 'function') {
     if (!unsavedGuard.confirmDiscard()) {
       return
@@ -133,6 +135,7 @@ function handleClose() {
 }
 
 function handleSubmit() {
+  if (props.saving) return
   const {
     category_id,
     name,
@@ -162,8 +165,7 @@ function handleSubmit() {
     target_group_id: target_kind === 'group' ? target_group_id : '',
   }
 
-  // Update initialSnapshot so dirty guard won't block after saving
-  initialSnapshot.value = JSON.stringify(form.value)
+  // Only a successful parent save closes the form; failed requests retain the dirty baseline.
   emit('save', payload)
 }
 </script>
@@ -175,7 +177,9 @@ function handleSubmit() {
     :close-on-backdrop="false"
     @update:model-value="handleClose"
   >
+    <p v-if="error" role="alert" class="alert alert-error text-sm whitespace-pre-wrap [overflow-wrap:anywhere]" data-testid="rule-save-error">{{ error }}</p>
     <form class="space-y-4" @submit.prevent="handleSubmit">
+      <fieldset :disabled="saving" class="space-y-4 min-w-0">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <!-- Category Selection -->
         <div class="sm:col-span-2 space-y-1.5">
@@ -328,6 +332,7 @@ function handleSubmit() {
           </select>
         </div>
       </div>
+      </fieldset>
     </form>
 
     <template #footer>

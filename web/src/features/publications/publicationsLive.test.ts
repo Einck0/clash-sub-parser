@@ -19,6 +19,9 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
     toastStore.clear()
     setLocale('zh-CN')
     vi.restoreAllMocks()
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => path === '/api/v1/settings/auth'
+      ? { export_mode: api.getAuthToken() ? 'protected' : 'open' }
+      : [])
 
     if (!HTMLDialogElement.prototype.showModal) {
       HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
@@ -79,6 +82,7 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
     app = createApp({ render: () => h(PublicationsView) })
     app.mount(container)
 
+    await Promise.resolve()
     await nextTick()
 
     // Mihomo input displays /clash
@@ -109,6 +113,7 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
     app = createApp({ render: () => h(PublicationsView) })
     app.mount(container)
 
+    await Promise.resolve()
     await nextTick()
 
     // Input displays direct route with ?token=...
@@ -134,6 +139,7 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
     app = createApp({ render: () => h(PublicationsView) })
     app.mount(container)
 
+    await Promise.resolve()
     await nextTick()
 
     const copyQxBtn = container.querySelector('[data-testid-target="copy-client-subscription-qx"]') as HTMLButtonElement
@@ -162,7 +168,7 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
     } as any)
 
     try {
-      const res = await pub.downloadDirectConfig('singbox')
+      const res = await pub.downloadDirectConfig('singbox', { mode: 'open' })
       expect(res).toBe(true)
       expect(fetchSpy).toHaveBeenCalledWith(
         expect.stringContaining('/singbox'),
@@ -195,7 +201,7 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
       }),
     } as any)
 
-    await expect(pub.downloadDirectConfig('mihomo')).rejects.toThrow(
+    await expect(pub.downloadDirectConfig('mihomo', { mode: 'open' })).rejects.toThrow(
       'Route group [Streaming] contains no reachable candidates'
     )
 
@@ -236,7 +242,7 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
       blob,
     } as any)
 
-    const err = await pub.downloadDirectConfig('surge').catch(error => error)
+    const err = await pub.downloadDirectConfig('surge', { mode: 'open' }).catch(error => error)
     expect(err).toBeInstanceOf(ApiError)
     expect(err).toMatchObject({ status: 422, code, requestId, message })
     expect(pub.downloadingTargets.value.surge).toBe(false)
@@ -255,7 +261,7 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
     } as any)
 
     try {
-      await pub.downloadDirectConfig('surge')
+      await pub.downloadDirectConfig('surge', { mode: 'open' })
       expect.fail('should have thrown error')
     } catch (err: any) {
       expect(err.message).not.toContain('my-secret-credential-value')
@@ -272,14 +278,10 @@ describe('Clean Minimal Client Subscriptions Specification (Zero-Overengineering
 
     await nextTick()
 
-    const downloadBtn = container.querySelector(
-      '[data-testid-target="download-client-subscription-singbox"]'
-    ) as HTMLButtonElement
-    expect(downloadBtn).not.toBeNull()
-    expect(downloadBtn.disabled).toBe(true)
+    const downloadBtn = container.querySelector('[data-testid="download-preview-btn"]')
+    expect(downloadBtn).toBeNull()
     expect(container.querySelector('[data-testid="preview-actions"]')).toBeNull()
 
-    downloadBtn.click()
     await nextTick()
 
     expect(fetchSpy).not.toHaveBeenCalled()

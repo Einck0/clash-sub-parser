@@ -2021,9 +2021,27 @@ func (s *Service) UpdateNodeConnection(ctx context.Context, cmd UpdateNodeConnec
 			}
 		}
 		updatedCreds.ALPN = alpnList
+		// 导入节点也会从 transport 读取协商参数，显式编辑时同步这份有效值
+		delete(updatedCreds.Transport, "alpn")
+		if len(alpnList) > 0 {
+			if updatedCreds.Transport == nil {
+				updatedCreds.Transport = make(map[string]string)
+			}
+			updatedCreds.Transport["alpn"] = strings.Join(alpnList, ",")
+		}
 	}
 	if cmd.Patch.SNI != nil {
 		updatedCreds.SNI = strings.TrimSpace(*cmd.Patch.SNI)
+		// 清空后不能让 HTTP 省略的空字段被旧域名别名补回
+		for _, key := range []string{"sni", "servername", "serverName", "peer"} {
+			delete(updatedCreds.Transport, key)
+		}
+		if updatedCreds.SNI != "" {
+			if updatedCreds.Transport == nil {
+				updatedCreds.Transport = make(map[string]string)
+			}
+			updatedCreds.Transport["sni"] = updatedCreds.SNI
+		}
 	}
 	if cmd.Patch.DisableSNI != nil {
 		updatedCreds.DisableSNI = *cmd.Patch.DisableSNI

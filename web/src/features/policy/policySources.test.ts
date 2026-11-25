@@ -15,6 +15,20 @@ import {
 } from './policyTypes'
 import { api, ApiError } from '../../api/client'
 
+// Source-pipeline tests keep the overlay shell inline; policySafety covers the real Drawer.
+vi.mock('../../ui/Drawer.vue', async () => {
+  const { defineComponent, h } = await import('vue')
+  return { default: defineComponent({
+    props: ['modelValue', 'title', 'description', 'widthClass'],
+    emits: ['close'],
+    setup(props, { slots }) {
+      return () => props.modelValue ? h('section', { role: 'dialog', class: props.widthClass }, [
+        h('h2', props.title), h('p', props.description), slots.default?.(), slots.footer?.(),
+      ]) : null
+    },
+  }) }
+})
+
 describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
   let container: HTMLDivElement
 
@@ -761,8 +775,8 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
 
         const sheetDialog = container.querySelector('[role="dialog"]') as HTMLElement
         expect(sheetDialog).not.toBeNull()
-        expect(sheetDialog.className).toContain('adaptive-surface-sheet')
-        expect(sheetDialog.className).toContain('max-w-full')
+        expect(sheetDialog.className).toContain('md:max-w-4xl')
+        expect(sheetDialog.className).toContain('lg:max-w-6xl')
 
         app.unmount()
       })

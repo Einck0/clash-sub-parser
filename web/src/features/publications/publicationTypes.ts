@@ -100,6 +100,7 @@ export interface Diagnostic {
 
 export interface ExcludedNode {
   node_id: string
+  display_name?: string
   code?: string
   reason?: string
 }

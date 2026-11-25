@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import {
   DocumentDuplicateIcon,
   ServerStackIcon,
@@ -8,17 +9,17 @@ import {
   Cog6ToothIcon,
   SparklesIcon,
 } from '@heroicons/vue/24/outline'
-import { t, uiText } from '../../locales'
+import { uiText } from '../../locales'
 import type { QuickActionItem } from './dashboardTypes'
 
 const emit = defineEmits<{
   (e: 'navigate', routeName: string): void
 }>()
 
-const actions: QuickActionItem[] = [
+const actions = computed<QuickActionItem[]>(() => [
   {
     id: 'subscriptions',
-    title: t('dashboard.addSubscription'),
+    title: uiText('订阅管理', 'Subscriptions'),
     description: uiText('管理上游订阅与节点拉取', 'Manage feeds & ingestion'),
     routeName: 'subscriptions',
     icon: DocumentDuplicateIcon,
@@ -46,19 +47,19 @@ const actions: QuickActionItem[] = [
   },
   {
     id: 'publications',
-    title: t('dashboard.exportConfig'),
+    title: uiText('配置导出', 'Export Config'),
     description: uiText('生成Clash/Sing-box配置', 'Generate client subscription links'),
     routeName: 'publications',
     icon: ArrowDownTrayIcon,
   },
   {
     id: 'settings',
-    title: t('dashboard.systemSettings'),
+    title: uiText('系统设置', 'System Settings'),
     description: uiText('全局筛选、认证与偏好', 'Security, filters & preferences'),
     routeName: 'settings',
     icon: Cog6ToothIcon,
   },
-]
+])
 
 function handleClick(routeName: string) {
   emit('navigate', routeName)
@@ -72,8 +73,8 @@ function handleClick(routeName: string) {
       <div class="flex items-center justify-between gap-2 min-w-0">
         <div class="flex items-center gap-2 min-w-0">
           <SparklesIcon class="w-4 h-4 text-primary shrink-0" />
-          <h3 class="text-sm sm:text-base font-bold text-base-content truncate">
-            {{ t('dashboard.quickActionsTitle') }}
+          <h3 class="text-sm sm:text-base font-bold text-base-content break-words">
+            {{ uiText('快捷入口', 'Quick actions') }}
           </h3>
         </div>
         <span class="text-xs text-base-content/50 hidden sm:inline truncate">
@@ -93,9 +94,9 @@ function handleClick(routeName: string) {
         >
           <div class="flex items-center gap-1.5 w-full">
             <component :is="action.icon" class="w-4 h-4 text-primary shrink-0" />
-            <span class="font-semibold text-xs text-base-content truncate">{{ action.title }}</span>
+            <span class="font-semibold text-xs text-base-content break-words">{{ action.title }}</span>
           </div>
-          <span class="text-[11px] text-base-content/60 font-normal truncate w-full">
+          <span class="text-[11px] text-base-content/60 font-normal whitespace-normal break-words w-full">
             {{ action.description }}
           </span>
         </button>

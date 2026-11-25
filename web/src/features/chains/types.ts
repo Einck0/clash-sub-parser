@@ -71,52 +71,63 @@ export interface EffectsResult {
 export interface DisplayNameResult {
   name: string
   isMissing: boolean
+  isUnverified: boolean
 }
 
 export function getTargetDisplayName(
   type: ProxyChainTargetType,
   id: string,
-  options: OptionsResult
+  options: OptionsResult,
+  verified = true
 ): DisplayNameResult {
   if (!id) {
-    return { name: '', isMissing: false }
+    return { name: '', isMissing: false, isUnverified: false }
   }
-  let list: OptionItem[] = []
-  if (type === 'subscription') {
-    list = options.subscriptions || []
-  } else if (type === 'node_group') {
-    list = options.groups || []
-  } else if (type === 'node') {
-    list = options.nodes || []
-  }
-
+  const list = type === 'subscription'
+    ? options.subscriptions
+    : type === 'node_group' ? options.groups : options.nodes
   const found = list.find((item) => item.id === id)
   if (found) {
-    return { name: displayName(found.name, uiText('未命名目标', 'Unnamed target'), id), isMissing: false }
+    return {
+      name: displayName(found.name, uiText('未命名目标', 'Unnamed target'), id),
+      isMissing: false,
+      isUnverified: !verified,
+    }
   }
-  return { name: uiText('目标已失效，请重新选择', 'Target unavailable; select again'), isMissing: true }
+  return {
+    name: verified
+      ? uiText('目标已失效，请重新选择', 'Target unavailable; select again')
+      : uiText('目标待确认', 'Target unverified'),
+    isMissing: verified,
+    isUnverified: !verified,
+  }
 }
 
 export function getDialerDisplayName(
   type: ProxyChainDialerType,
   id: string,
-  options: OptionsResult
+  options: OptionsResult,
+  verified = true
 ): DisplayNameResult {
   if (!id) {
-    return { name: '', isMissing: false }
+    return { name: '', isMissing: false, isUnverified: false }
   }
-  let list: OptionItem[] = []
-  if (type === 'node_group') {
-    list = options.groups || []
-  } else if (type === 'node') {
-    list = options.nodes || []
-  }
-
+  const list = type === 'node_group' ? options.groups : options.nodes
   const found = list.find((item) => item.id === id)
   if (found) {
-    return { name: displayName(found.name, uiText('未命名跳板', 'Unnamed dialer'), id), isMissing: false }
+    return {
+      name: displayName(found.name, uiText('未命名跳板', 'Unnamed dialer'), id),
+      isMissing: false,
+      isUnverified: !verified,
+    }
   }
-  return { name: uiText('跳板已失效，请重新选择', 'Dialer unavailable; select again'), isMissing: true }
+  return {
+    name: verified
+      ? uiText('跳板已失效，请重新选择', 'Dialer unavailable; select again')
+      : uiText('跳板待确认', 'Dialer unverified'),
+    isMissing: verified,
+    isUnverified: !verified,
+  }
 }
 
 export function getTargetTypeLabel(type: ProxyChainTargetType): string {

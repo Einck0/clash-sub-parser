@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import {
   ArrowPathIcon,
   BoltIcon,
@@ -7,7 +7,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import PageToolbar from '../../ui/PageToolbar.vue'
 import { SUPPORTED_NODE_PROTOCOLS } from './nodeView'
-import { IP_RISK_BANDS, IP_RISK_BAND_LABELS } from '../policy/policyTypes'
+import { IP_RISK_BANDS } from '../policy/policyTypes'
 import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
 import { toastStore } from '../../ui/toast'
@@ -25,6 +25,7 @@ const props = defineProps<{
   riskScoreMax?: string
   speedMin?: string
   searchQuery: string
+  appliedSearchQuery?: string
   healthCounts: {
     all: number
     probing: number
@@ -68,17 +69,34 @@ function changeSpeedMinimum(event: Event) {
   emit('update:speedMin', speed)
 }
 
+const advancedOpen = ref(false)
+const activeChips = computed(() => [
+  props.protocolFilter !== 'all' && { key: 'protocol', label: `${uiText('协议', 'Protocol')}: ${props.protocolFilter.toUpperCase()}` },
+  props.healthFilter !== 'all' && { key: 'health', label: `${uiText('状态', 'Health')}: ${healthLabel(props.healthFilter)}` },
+  props.riskBandFilter && props.riskBandFilter !== 'all' && { key: 'risk', label: `${uiText('IP 风险', 'IP risk')}: ${riskLabel(props.riskBandFilter)}` },
+  props.riskScoreMax && { key: 'score', label: `${uiText('风险分数', 'Risk score')} ≤ ${props.riskScoreMax}` },
+  props.speedMin && { key: 'speed', label: `≥ ${props.speedMin} KiB/s` },
+  props.appliedSearchQuery && { key: 'search', label: `${uiText('搜索', 'Search')}: ${props.appliedSearchQuery}` },
+].filter((chip): chip is { key: string; label: string } => Boolean(chip)))
+
+function healthLabel(value: string) {
+  return ({ all: uiText('全部', 'All'), probing: uiText('检测中', 'Probing'), healthy: uiText('正常', 'Healthy'), unhealthy: uiText('异常', 'Unhealthy'), unknown: uiText('未知', 'Unknown') } as Record<string, string>)[value] || uiText('未知', 'Unknown')
+}
+function riskLabel(value: string) {
+  return ({ low: uiText('低', 'Low'), medium: uiText('中', 'Medium'), high: uiText('高', 'High'), critical: uiText('严重', 'Critical'), unknown: uiText('未知', 'Unknown') } as Record<string, string>)[value] || value
+}
+function clearChip(key: string) {
+  if (key === 'protocol') emit('update:protocolFilter', 'all')
+  else if (key === 'health') emit('update:healthFilter', 'all')
+  else if (key === 'risk') emit('update:riskBandFilter', 'all')
+  else if (key === 'score') emit('update:riskScoreMax', '')
+  else if (key === 'speed') emit('update:speedMin', '')
+  else { emit('update:searchQuery', ''); emit('search-submit') }
+}
+
 const totalBadgeText = computed(() => {
-  if (!props.initialLoaded && props.loading) {
-    return '--'
-  }
-  if (props.healthFilter === 'all') {
-    if (props.itemsCount < props.total) {
-      return `${props.itemsCount} / ${props.total.toLocaleString()} ${t('nodes.totalNodes')}`
-    }
-    return `${props.total.toLocaleString()} ${t('nodes.totalNodes')}`
-  }
-  return `${props.filteredCount} / ${props.total.toLocaleString()} ${t('nodes.totalNodes')}`
+  if (!props.initialLoaded) return '--'
+  return `${props.itemsCount.toLocaleString()} / ${props.total.toLocaleString()} ${uiText('已加载 / 匹配节点', 'loaded / matching nodes')}`
 })
 </script>
 
@@ -144,7 +162,6 @@ const totalBadgeText = computed(() => {
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
-          <!-- Health Select Dropdown -->
           <select
             :value="healthFilter"
             data-testid="node-health-filter"
@@ -152,13 +169,12 @@ const totalBadgeText = computed(() => {
             class="select select-xs sm:select-sm text-xs"
             @change="$emit('update:healthFilter', ($event.target as HTMLSelectElement).value)"
           >
-            <option value="all">全部</option>
-            <option value="probing">检测中</option>
-            <option value="healthy">正常</option>
-            <option value="unhealthy">异常</option>
-            <option value="unknown">未知</option>
+            <option value="all">{{ healthLabel('all') }}</option>
+            <option value="probing">{{ healthLabel('probing') }}</option>
+            <option value="healthy">{{ healthLabel('healthy') }}</option>
+            <option value="unhealthy">{{ healthLabel('unhealthy') }}</option>
+            <option value="unknown">{{ healthLabel('unknown') }}</option>
           </select>
-
           <!-- Search Input -->
           <label class="w-full sm:w-60">
             <span class="sr-only">{{ uiText('搜索节点', 'Search nodes') }}</span>
@@ -175,17 +191,18 @@ const totalBadgeText = computed(() => {
         </div>
       </div>
 
-      <div class="flex flex-wrap items-center gap-2 text-xs" data-testid="node-risk-filters">
+      <button type="button" data-testid="node-advanced-filters-toggle" class="btn btn-ghost btn-xs self-start" :aria-expanded="advancedOpen" aria-controls="node-advanced-filters" @click="advancedOpen = !advancedOpen">{{ uiText('高级筛选', 'Advanced filters') }} <span v-if="riskBandFilter !== 'all' || riskScoreMax || speedMin" class="badge badge-primary badge-xs">{{ uiText('已启用', 'Active') }}</span></button>
+      <div v-show="advancedOpen" id="node-advanced-filters" class="flex flex-wrap items-center gap-2 text-xs p-3 rounded-xl bg-base-200" data-testid="node-risk-filters">
         <label class="flex items-center gap-2">
-          <span>IP 风险</span>
-          <select :value="riskBandFilter || 'all'" data-testid="node-risk-band-filter" aria-label="IP 风险等级" class="select select-xs sm:select-sm" @change="$emit('update:riskBandFilter', ($event.target as HTMLSelectElement).value)">
-            <option value="all">全部风险等级</option>
-            <option v-for="band in IP_RISK_BANDS" :key="band" :value="band">{{ IP_RISK_BAND_LABELS[band] }}</option>
+          <span>{{ uiText('IP 风险', 'IP risk') }}</span>
+          <select :value="riskBandFilter || 'all'" data-testid="node-risk-band-filter" :aria-label="uiText('IP 风险等级', 'IP risk band')" class="select select-xs sm:select-sm" @change="$emit('update:riskBandFilter', ($event.target as HTMLSelectElement).value)">
+            <option value="all">{{ uiText('全部风险等级', 'All risk bands') }}</option>
+            <option v-for="band in IP_RISK_BANDS" :key="band" :value="band">{{ riskLabel(band) }}</option>
           </select>
         </label>
         <label class="flex items-center gap-2">
-          <span>分数上限</span>
-          <input :value="riskScoreMax" type="number" min="0" max="100" step="1" placeholder="不限" class="input input-xs sm:input-sm w-24" data-testid="node-risk-score-max" aria-label="风险分数上限" @change="$emit('update:riskScoreMax', ($event.target as HTMLInputElement).value)" />
+          <span>{{ uiText('分数上限', 'Maximum score') }}</span>
+          <input :value="riskScoreMax" type="number" min="0" max="100" step="1" :placeholder="uiText('不限', 'Any')" class="input input-xs sm:input-sm w-24" data-testid="node-risk-score-max" :aria-label="uiText('风险分数上限', 'Maximum risk score')" @change="$emit('update:riskScoreMax', ($event.target as HTMLInputElement).value)" />
         </label>
         <label class="flex items-center gap-2">
           <span>{{ uiText('最低测速 (KiB/s)', 'Minimum speed (KiB/s)') }}</span>
@@ -196,10 +213,14 @@ const totalBadgeText = computed(() => {
           />
         </label>
         <span id="node-speed-filter-help" class="text-base-content/60">{{ uiText('留空不限。设置下限只筛选当前连接已保存的最新测速；失败、失效或未测速的节点不匹配，不会发起测速。', 'Leave blank for any speed. A minimum uses only the latest saved speed for this connection; failed, stale or untested nodes do not match. No test is started.') }}</span>
-        <button type="button" class="btn btn-ghost btn-xs" data-testid="node-reset-filters" @click="$emit('reset-filters')">重置筛选</button>
-        <span class="text-base-content/60">未知表示当前无有效风险分数；分数上限不匹配未知。</span>
+        <span class="text-base-content/60">{{ uiText('未知表示当前无有效风险分数；分数上限不匹配未知。', 'Unknown means no valid current risk score; maximum-score filters exclude unknown scores.') }}</span>
       </div>
 
+      <div class="flex flex-wrap gap-1.5 items-center" data-testid="node-active-filter-chips">
+        <button v-for="chip in activeChips" :key="chip.key" type="button" class="btn btn-xs btn-soft h-auto min-h-7 max-w-full whitespace-normal break-words [overflow-wrap:anywhere]" :aria-label="uiText(`移除筛选 ${chip.label}`, `Remove filter ${chip.label}`)" @click="clearChip(chip.key)">{{ chip.label }} <span aria-hidden="true">×</span></button>
+        <button type="button" class="btn btn-ghost btn-xs" data-testid="node-reset-filters" @click="$emit('reset-filters')">{{ uiText('重置筛选', 'Reset filters') }}</button>
+      </div>
+      <p class="text-[11px] text-base-content/60">{{ uiText('计数是当前筛选匹配结果，不是全部库存。状态计数仅含已加载项；健康与检测中可重叠。', 'Counts refer to the current matching results, not the whole inventory. Health counts include loaded rows only; health and probe activity may overlap.') }}</p>
       <!-- Health Status Quick Filter Capsules -->
       <div
         data-testid="node-health-pills"
@@ -207,7 +228,7 @@ const totalBadgeText = computed(() => {
         role="group"
         :aria-label="uiText('节点状态筛选', 'Filter by node health')"
       >
-        <span class="opacity-60 mr-1 font-medium">{{ uiText('节点状态：', 'Health:') }}</span>
+          <span class="opacity-60 mr-1 font-medium">{{ uiText('节点状态：', 'Health:') }}</span>
         <button
           type="button"
           data-testid="node-health-pill-all"
@@ -216,7 +237,7 @@ const totalBadgeText = computed(() => {
           :aria-pressed="healthFilter === 'all'"
           @click="$emit('update:healthFilter', 'all')"
         >
-          全部
+          {{ healthLabel('all') }} · {{ healthCounts.all }}
         </button>
         <button
           type="button"
@@ -230,7 +251,7 @@ const totalBadgeText = computed(() => {
             class="w-1.5 h-1.5 rounded-full bg-current"
             :class="{ 'animate-ping': healthCounts.probing > 0 }"
           />
-          <span>检测中</span>
+          <span>{{ healthLabel('probing') }} · {{ healthCounts.probing }}</span>
         </button>
         <button
           type="button"
@@ -240,7 +261,7 @@ const totalBadgeText = computed(() => {
           :aria-pressed="healthFilter === 'healthy'"
           @click="$emit('update:healthFilter', 'healthy')"
         >
-          正常
+          {{ healthLabel('healthy') }} · {{ healthCounts.healthy }}
         </button>
         <button
           type="button"
@@ -250,7 +271,7 @@ const totalBadgeText = computed(() => {
           :aria-pressed="healthFilter === 'unhealthy'"
           @click="$emit('update:healthFilter', 'unhealthy')"
         >
-          异常
+          {{ healthLabel('unhealthy') }} · {{ healthCounts.unhealthy }}
         </button>
         <button
           type="button"
@@ -260,7 +281,7 @@ const totalBadgeText = computed(() => {
           :aria-pressed="healthFilter === 'unknown' || healthFilter === 'untested'"
           @click="$emit('update:healthFilter', 'unknown')"
         >
-          未知
+          {{ healthLabel('unknown') }} · {{ healthCounts.unknown }}
         </button>
       </div>
     </div>
@@ -329,7 +350,7 @@ const totalBadgeText = computed(() => {
           @click="$emit('probe-selected')"
         >
           <BoltIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          <span>{{ t('nodes.probeSelected') }}</span>
+          <span>{{ uiText('检测所选', 'Probe selected') }}</span>
           <span v-if="selectedCount > 0" class="badge badge-xs badge-neutral font-mono">
             {{ selectedCount }}
           </span>
@@ -343,7 +364,7 @@ const totalBadgeText = computed(() => {
           @click="$emit('probe-all')"
         >
           <BoltIcon class="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          <span>{{ t('nodes.probeAll') }}</span>
+          <span>{{ uiText('检测全部', 'Probe all') }}</span>
         </button>
 
         <!-- Probe Runs & Batch History Drawer Button -->

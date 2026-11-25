@@ -13,12 +13,14 @@ import { t } from '../../locales'
 import { uiText } from '../../locales/redesign'
 import { displayText } from '../../utils/displayNames'
 import { useAuthSettings, type UseAuthSettingsReturn } from './useAuthSettings'
+import { useSettingsDraft } from './useSettingsDraft'
 
 const props = defineProps<{
   auth?: UseAuthSettingsReturn
 }>()
 
 const auth = props.auth ?? useAuthSettings()
+useSettingsDraft(auth.isDirty)
 </script>
 
 <template>
@@ -46,14 +48,15 @@ const auth = props.auth ?? useAuthSettings()
           </span>
         </div>
 
-        <div v-if="auth.settingsError.value" role="alert" class="alert alert-error text-xs flex items-center justify-between">
-          <span>{{ displayText(auth.settingsError.value) }}</span>
-          <button type="button" class="btn btn-xs btn-ghost" @click="auth.probeAuthMode">
+        <div v-if="auth.settingsError.value" role="alert" class="alert alert-error text-xs flex flex-wrap items-center justify-between gap-2">
+          <span class="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ displayText(auth.settingsError.value) }}</span>
+          <button type="button" class="btn btn-xs btn-ghost" :disabled="auth.isBusy.value || auth.authMode.value === 'loading'" @click="auth.probeAuthMode">
             {{ t('common.retry') }}
           </button>
         </div>
 
-        <div class="space-y-3 pt-1">
+        <p v-if="!auth.authSettings.value && auth.authMode.value === 'loading'" role="status">{{ t('common.loading') }}</p>
+        <fieldset v-if="auth.authSettings.value" :disabled="auth.isBusy.value || auth.authMode.value === 'loading' || auth.authMode.value === 'error'" class="space-y-3 pt-1">
           <label class="flex items-center justify-between gap-4 p-3 rounded-xl bg-base-100/60 border border-base-300/40 cursor-pointer hover:bg-base-100/80 transition-colors">
             <div class="space-y-0.5">
               <span class="text-sm font-semibold text-base-content">{{ t('settings.adminProtection') }}</span>
@@ -81,7 +84,7 @@ const auth = props.auth ?? useAuthSettings()
               :disabled="!auth.authSettings.value || auth.isSavingSwitches.value"
             />
           </label>
-        </div>
+        </fieldset>
 
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
           <div class="space-y-1 text-xs">
@@ -103,7 +106,7 @@ const auth = props.auth ?? useAuthSettings()
             type="button"
             class="btn btn-primary btn-sm self-start sm:self-auto gap-2"
             data-testid="save-auth-switches-btn"
-            :disabled="!auth.authSettings.value || auth.isSavingSwitches.value"
+            :disabled="!auth.authSettings.value || auth.isBusy.value || auth.authMode.value === 'loading'"
             @click="auth.saveSwitches"
           >
             <span v-if="auth.isSavingSwitches.value" class="loading loading-spinner loading-xs" />
@@ -136,9 +139,9 @@ const auth = props.auth ?? useAuthSettings()
             <span
               data-testid="token-status-badge"
               class="badge badge-sm text-[11px] font-medium"
-              :class="auth.storedToken.value ? 'badge-success badge-outline' : 'badge-ghost'"
+              :class="auth.authSettings.value && auth.storedToken.value ? 'badge-success badge-outline' : 'badge-ghost'"
             >
-              {{ auth.storedToken.value ? t('settings.tokenStatusActive') : t('settings.tokenStatusNotConfigured') }}
+              {{ !auth.authSettings.value ? '—' : auth.storedToken.value ? t('settings.tokenStatusActive') : t('settings.tokenStatusNotConfigured') }}
             </span>
           </div>
 
@@ -148,7 +151,7 @@ const auth = props.auth ?? useAuthSettings()
               class="select-all break-all"
               :class="auth.storedToken.value ? 'text-base-content font-semibold' : 'text-base-content/40 italic'"
             >
-              {{ auth.displayToken.value }}
+              {{ !auth.authSettings.value ? uiText('尚未确认服务端令牌状态', 'Server token status not yet confirmed') : auth.displayToken.value }}
             </span>
             <button
               v-if="auth.storedToken.value"
@@ -179,14 +182,14 @@ const auth = props.auth ?? useAuthSettings()
               :placeholder="t('settings.tokenPlaceholder')"
               autocomplete="new-password"
               spellcheck="false"
-              :disabled="auth.isSavingToken.value || auth.isClearingToken.value"
+              :disabled="!auth.authSettings.value || auth.isBusy.value || auth.authMode.value === 'loading'"
             />
             <div class="flex gap-2">
               <button
                 type="button"
                 class="btn btn-primary btn-sm flex-1 sm:flex-initial gap-1.5"
                 data-testid="save-token-btn"
-                :disabled="!auth.inputToken.value.trim() || auth.isSavingToken.value || auth.isClearingToken.value"
+                :disabled="!auth.authSettings.value || !auth.inputToken.value.trim() || auth.isBusy.value || auth.authMode.value === 'loading'"
                 @click="auth.saveToken"
               >
                 <span v-if="auth.isSavingToken.value" class="loading loading-spinner loading-xs" />
@@ -196,7 +199,7 @@ const auth = props.auth ?? useAuthSettings()
                 type="button"
                 class="btn btn-outline btn-error btn-sm gap-1.5"
                 data-testid="clear-token-btn"
-                :disabled="!auth.authSettings.value?.token_configured && !auth.storedToken.value"
+                :disabled="!auth.authSettings.value || auth.isBusy.value || auth.authMode.value === 'loading' || (!auth.authSettings.value.token_configured && !auth.storedToken.value)"
                 @click="auth.clearToken"
               >
                 <TrashIcon class="w-3.5 h-3.5" />
@@ -235,7 +238,7 @@ const auth = props.auth ?? useAuthSettings()
             type="button"
             class="btn btn-outline btn-sm gap-2 shrink-0 self-start sm:self-auto"
             data-testid="test-connection-btn"
-            :disabled="auth.isTesting.value"
+            :disabled="auth.isBusy.value"
             @click="auth.testConnection"
           >
             <span v-if="auth.isTesting.value" class="loading loading-spinner loading-xs" />

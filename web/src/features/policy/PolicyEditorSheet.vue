@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
-  XMarkIcon,
   ExclamationTriangleIcon,
   EyeIcon,
   PencilSquareIcon,
 } from '@heroicons/vue/24/outline'
+import { api } from '../../api/client'
+import Drawer from '../../ui/Drawer.vue'
 import type {
   GroupDraftPreviewPayload,
   GroupType,
@@ -16,10 +17,8 @@ import { useGroupDraft } from './useGroupDraft'
 import { useGroupPreview } from './useGroupPreview'
 import SourcePipelineEditor from './SourcePipelineEditor.vue'
 import GroupPreviewPanel from './GroupPreviewPanel.vue'
-import { useBodyScrollLock } from '../../composables/useBodyScrollLock'
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 import { uiText } from '../../locales/redesign'
-import { t } from '../../locales'
 import { displayName, displayText } from '../../utils/displayNames'
 
 interface Props {
@@ -28,6 +27,7 @@ interface Props {
   allGroups: PolicyGroup[]
   mode?: 'group' | 'edges'
   saving?: boolean
+  reloading?: boolean
   availableNodes?: Array<{
     logical_id?: string
     logicalId?: string
@@ -36,7 +36,7 @@ interface Props {
     active?: boolean
     protocol?: string
   }>
-  conflictError?: { currentRevision: number; message: string } | null
+  conflictError?: { currentRevision: number | null; message: string } | null
   cycleError?: { cyclePath: string[]; message: string } | null
   serverError?: string | null
   topologyStatus?: 'idle' | 'loading' | 'error' | 'ready'
@@ -47,6 +47,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   mode: 'group',
   saving: false,
+  reloading: false,
   availableNodes: () => [],
   conflictError: null,
   cycleError: null,
@@ -72,16 +73,16 @@ const emit = defineEmits<{
   (e: 'retry-topology'): void
 }>()
 
-// Engage mobile body scroll lock when sheet is open
-useBodyScrollLock(computed(() => props.open))
-
 // Draft and Preview composables
 const draft = useGroupDraft()
 const preview = useGroupPreview()
+const rebasing = ref(false)
+const busy = computed(() => props.saving || props.reloading || rebasing.value)
+const unsaved = computed(() => props.open && draft.isDirty.value)
 
 // Guard against unsaved changes on close or navigation
 const { confirmDiscard } = useUnsavedChanges(
-  draft.isDirty,
+  unsaved,
   () => uiText('当前草稿尚未保存，确定要放弃修改吗？', 'Current group draft has unsaved changes. Discard?')
 )
 
@@ -92,21 +93,21 @@ const activeSheetTab = ref<'editor' | 'preview'>('editor')
 watch(
   () => props.conflictError,
   (c) => {
-    if (c) draft.conflictError.value = c
+    draft.conflictError.value = c ?? null
   },
   { immediate: true }
 )
 watch(
   () => props.cycleError,
   (c) => {
-    if (c) draft.cycleError.value = c
+    draft.cycleError.value = c ?? null
   },
   { immediate: true }
 )
 watch(
   () => props.serverError,
   (s) => {
-    if (s) draft.serverError.value = s
+    draft.serverError.value = s ?? null
   },
   { immediate: true }
 )
@@ -183,11 +184,20 @@ function handleTabSwitch(tab: 'editor' | 'preview') {
   }
 }
 
+function handleTabKeydown(event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const tab = event.key === 'Home' ? 'editor' : event.key === 'End' ? 'preview' : activeSheetTab.value === 'editor' ? 'preview' : 'editor'
+  handleTabSwitch(tab)
+  document.getElementById(tab === 'editor' ? 'policy-source-tab' : 'policy-preview-tab')?.focus()
+}
+
 function handleRefreshPreview() {
   preview.triggerImmediate(getPreviewPayload())
 }
 
 function handleClose() {
+  if (busy.value) return
   if (confirmDiscard()) {
     preview.cleanup()
     emit('close')
@@ -195,7 +205,7 @@ function handleClose() {
 }
 
 function handleSave() {
-  if (!draft.checkDraftValidity()) {
+  if (busy.value || props.topologyStatus !== 'ready' || !draft.name.value.trim() || !draft.checkDraftValidity()) {
     return
   }
   const payload = draft.buildSavePayload()
@@ -203,18 +213,39 @@ function handleSave() {
 }
 
 function handleReloadFromServer() {
-  if (props.group) {
+  if (props.group && !busy.value && confirmDiscard()) {
     emit('reload-group', props.group.id)
   }
 }
 
-function handlePreserveLocalDraft() {
-  if (draft.conflictError.value?.currentRevision) {
-    draft.resolveConflictKeepDraft(draft.conflictError.value.currentRevision)
-  } else {
-    draft.clearConflict()
+async function handlePreserveLocalDraft() {
+  if (!props.group || busy.value) return
+  rebasing.value = true
+  const groupId = props.group.id
+  try {
+    let revision = draft.conflictError.value?.currentRevision
+    if (!Number.isInteger(revision) || (revision ?? 0) < 1) {
+      const latest = await api.get<PolicyGroup>(`/api/v1/policies/groups/${encodeURIComponent(groupId)}`)
+      if (latest.id !== groupId) {
+        throw new Error(uiText('读取的策略组无效，草稿已保留，请重试。', 'The returned group is invalid. Your draft is preserved; retry.'))
+      }
+      revision = latest.revision
+    }
+    if (!Number.isInteger(revision) || (revision ?? 0) < 1) {
+      throw new Error(uiText('服务端未返回有效版本，草稿已保留，请重试。', 'The server did not return a valid revision. Your draft is preserved; retry.'))
+    }
+    if (!props.open || props.group?.id !== groupId) return
+    draft.resolveConflictKeepDraft(revision as number)
+    draft.clearServerError()
+    scheduleLivePreview()
+    emit('clear-conflict')
+  } catch (error) {
+    if (props.open && props.group?.id === groupId) {
+      draft.serverError.value = displayText(error instanceof Error ? error.message : uiText('读取最新版本失败，草稿已保留。', 'Failed to read the latest revision. Your draft is preserved.'))
+    }
+  } finally {
+    rebasing.value = false
   }
-  emit('clear-conflict')
 }
 
 function handleDiscardSourceDraft() {
@@ -223,60 +254,36 @@ function handleDiscardSourceDraft() {
 </script>
 
 <template>
-  <Transition
-    enter-active-class="transition-opacity duration-200 ease-out"
-    enter-from-class="opacity-0"
-    enter-to-class="opacity-100"
-    leave-active-class="transition-opacity duration-150 ease-in"
-    leave-from-class="opacity-100"
-    leave-to-class="opacity-0"
+  <Drawer
+    :model-value="open"
+    :title="mode === 'edges' ? uiText('管理策略组来源', 'Manage Group Sources') : (group ? uiText('编辑策略组', 'Edit Policy Group') : uiText('创建策略组', 'Create Policy Group'))"
+    :description="group ? uiText(`版本 ${draft.expectedRevision.value}`, `Revision ${draft.expectedRevision.value}`) : ''"
+    width-class="md:max-w-4xl lg:max-w-6xl"
+    @close="handleClose"
   >
-    <div
-      v-if="open"
-      class="fixed inset-0 bg-neutral/40 z-40 backdrop-blur-xs transition-opacity"
-      aria-hidden="true"
-      @click="handleClose"
-    />
-  </Transition>
-
-  <Transition
-    enter-active-class="transition-all duration-300 ease-out"
-    enter-from-class="translate-y-full md:translate-y-4 md:opacity-0"
-    enter-to-class="translate-y-0 md:translate-y-0 md:opacity-100"
-    leave-active-class="transition-all duration-200 ease-in"
-    leave-from-class="translate-y-0 md:translate-y-0 md:opacity-100"
-    leave-to-class="translate-y-full md:translate-y-4 md:opacity-0"
-  >
-    <section
-      v-if="open"
-      role="dialog"
-      aria-modal="true"
-      :aria-labelledby="mode === 'edges' ? 'edges-editor-title' : 'policy-editor-title'"
-      class="adaptive-surface-sheet fixed bottom-0 inset-x-0 z-50 rounded-t-2xl md:rounded-2xl bg-base-100 border border-base-300 shadow-2xl flex flex-col max-w-full md:max-w-4xl lg:max-w-6xl md:mx-auto md:bottom-6 md:inset-x-4 max-h-[92vh] md:max-h-[85vh] overflow-hidden"
-    >
-      <!-- Sheet Header with Title, Tab switcher, and Close button -->
-      <header class="p-4 border-b border-base-300 flex flex-wrap items-center justify-between gap-3 shrink-0 bg-base-100">
+      <div class="space-y-3" data-testid="policy-editor-sheet">
+        <!-- Sheet Header with Title and Source / Preview tabs -->
+        <header class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center gap-2 min-w-0">
           <div class="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
             <PencilSquareIcon class="w-4 h-4" />
           </div>
           <div class="min-w-0">
-            <h2
-              :id="mode === 'edges' ? 'edges-editor-title' : 'policy-editor-title'"
-              class="font-bold text-base truncate"
-            >
-              {{ mode === 'edges' ? uiText('管理策略组来源', 'Manage Group Sources') : (group ? uiText('编辑策略组', 'Edit Policy Group') : uiText('创建策略组', 'Create Policy Group')) }}
+            <h2 class="font-bold text-base truncate">
+              {{ uiText('策略组编辑', 'Policy Group Editor') }}
             </h2>
-            <p v-if="group" class="text-[11px] font-mono opacity-60 truncate">
-              版本 {{ draft.expectedRevision.value }}
-            </p>
           </div>
         </div>
 
         <!-- Middle: Tab switcher for mobile / narrow viewports -->
-        <div class="flex items-center gap-1 bg-base-200 p-1 rounded-xl">
+        <div role="tablist" :aria-label="uiText('策略组编辑与预览', 'Policy group editor and preview')" class="flex flex-wrap items-center gap-1 bg-base-200 p-1 rounded-xl lg:hidden" @keydown="handleTabKeydown">
           <button
+            id="policy-source-tab"
             type="button"
+            role="tab"
+            aria-controls="policy-source-panel"
+            :aria-selected="activeSheetTab === 'editor'"
+            :tabindex="activeSheetTab === 'editor' ? 0 : -1"
             class="btn btn-xs rounded-lg gap-1.5 transition-all"
             :class="activeSheetTab === 'editor' ? 'btn-primary' : 'btn-ghost'"
             @click="handleTabSwitch('editor')"
@@ -286,7 +293,12 @@ function handleDiscardSourceDraft() {
           </button>
 
           <button
+            id="policy-preview-tab"
             type="button"
+            role="tab"
+            aria-controls="policy-preview-panel"
+            :aria-selected="activeSheetTab === 'preview'"
+            :tabindex="activeSheetTab === 'preview' ? 0 : -1"
             class="btn btn-xs rounded-lg gap-1.5 transition-all"
             :class="activeSheetTab === 'preview' ? 'btn-primary' : 'btn-ghost'"
             @click="handleTabSwitch('preview')"
@@ -296,46 +308,39 @@ function handleDiscardSourceDraft() {
           </button>
         </div>
 
-        <!-- Close button -->
-        <button
-          type="button"
-          class="btn btn-ghost btn-sm btn-circle shrink-0"
-          aria-label="关闭"
-          @click="handleClose"
-        >
-          <XMarkIcon class="w-5 h-5" />
-        </button>
-      </header>
+        </header>
 
       <!-- Alert Banners: 409 Conflict, 422 Cycle, Server Error -->
-      <div class="shrink-0 px-4 pt-3 space-y-2">
+      <div class="space-y-2">
         <!-- 409 Conflict Banner -->
         <div
           v-if="draft.conflictError.value"
           role="alert"
-          class="p-3.5 rounded-xl bg-error/10 border border-error/30 text-error text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+          class="p-3.5 rounded-xl bg-error/10 border border-error/30 text-error text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 break-words"
         >
           <div class="flex items-start gap-2.5 min-w-0">
             <ExclamationTriangleIcon class="w-5 h-5 shrink-0 mt-0.5" />
-            <div>
-              <h4 class="font-bold">版本冲突 (409 Conflict)</h4>
-              <p class="opacity-90 mt-0.5">{{ displayText(draft.conflictError.value.message) }}</p>
+            <div class="min-w-0 [overflow-wrap:anywhere]">
+              <h4 class="font-bold">{{ uiText('版本冲突', 'Revision conflict') }} (409 Conflict)</h4>
+              <p class="opacity-90 mt-0.5 whitespace-pre-wrap break-words">{{ displayText(draft.conflictError.value.message) }}</p>
             </div>
           </div>
-          <div class="flex items-center gap-2 shrink-0">
+          <div class="flex flex-wrap items-center gap-2 shrink-0">
             <button
               type="button"
               class="btn btn-xs btn-error btn-outline"
+              :disabled="busy"
               @click="handlePreserveLocalDraft"
             >
-              保留本地草稿
+              {{ uiText('保留本地草稿', 'Keep local draft') }}
             </button>
             <button
               type="button"
               class="btn btn-xs btn-error"
+              :disabled="busy"
               @click="handleReloadFromServer"
             >
-              重新拉取服务端版本
+              {{ uiText('重新拉取服务端版本', 'Reload server version') }}
             </button>
           </div>
         </div>
@@ -344,13 +349,13 @@ function handleDiscardSourceDraft() {
         <div
           v-if="draft.cycleError.value"
           role="alert"
-          class="p-3.5 rounded-xl bg-error/10 border border-error/30 text-error text-xs flex items-start gap-2.5"
+          class="p-3.5 rounded-xl bg-error/10 border border-error/30 text-error text-xs flex items-start gap-2.5 break-words"
         >
           <ExclamationTriangleIcon class="w-5 h-5 shrink-0 mt-0.5" />
-          <div class="min-w-0">
-            <h4 class="font-bold">检测到拓扑成环 (422 Unprocessable Entity)</h4>
-            <p class="opacity-90 mt-0.5">{{ displayText(draft.cycleError.value.message) }}</p>
-            <p v-if="draft.cycleError.value.cyclePath && draft.cycleError.value.cyclePath.length > 0" class="font-mono mt-1 text-[11px] font-semibold bg-base-100/70 p-1.5 rounded">
+          <div class="min-w-0 [overflow-wrap:anywhere]">
+            <h4 class="font-bold">{{ uiText('检测到拓扑成环', 'Topology cycle detected') }} (422 Unprocessable Entity)</h4>
+            <p class="opacity-90 mt-0.5 whitespace-pre-wrap break-words">{{ displayText(draft.cycleError.value.message) }}</p>
+            <p v-if="draft.cycleError.value.cyclePath && draft.cycleError.value.cyclePath.length > 0" class="font-mono mt-1 text-[11px] font-semibold bg-base-100/70 p-1.5 rounded whitespace-pre-wrap break-words">
               {{ draft.cycleError.value.cyclePath.map((id) => displayName(allGroups.find((g) => g.id === id)?.name, '未知策略组', id)).join(' → ') }}
             </p>
           </div>
@@ -360,11 +365,11 @@ function handleDiscardSourceDraft() {
         <div
           v-if="draft.serverError.value"
           role="alert"
-          class="p-3 rounded-xl bg-error/10 border border-error/30 text-error text-xs flex items-center justify-between gap-2"
+          class="p-3 rounded-xl bg-error/10 border border-error/30 text-error text-xs flex items-start justify-between gap-2 break-words"
         >
           <div class="flex items-center gap-2 min-w-0">
             <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-            <span class="truncate">{{ displayText(draft.serverError.value) }}</span>
+            <span class="min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{{ displayText(draft.serverError.value) }}</span>
           </div>
           <button
             type="button"
@@ -388,12 +393,12 @@ function handleDiscardSourceDraft() {
         <div
           v-else-if="topologyStatus === 'error'"
           data-testid="sheet-topology-error"
-          class="p-3 rounded-xl bg-warning/10 border border-warning/30 flex items-center justify-between gap-2 text-xs text-warning-content"
+          class="p-3 rounded-xl bg-warning/10 border border-warning/30 flex items-start justify-between gap-2 text-xs text-warning-content break-words"
         >
           <div class="flex items-center gap-2 min-w-0">
             <ExclamationTriangleIcon class="w-4 h-4 text-warning shrink-0" />
-            <span class="truncate">
-              {{ displayText(topologyError) || '全量策略组拓扑加载失败' }}
+            <span class="min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+              {{ displayText(topologyError) || uiText('全量策略组拓扑加载失败', 'Failed to load the full policy topology') }}
               {{ isTopologyStale ? '（当前显示为过期拓扑缓存，禁止保存）' : '（拓扑未就绪，禁止保存以避免丢失引用）' }}
             </span>
           </div>
@@ -409,14 +414,19 @@ function handleDiscardSourceDraft() {
       </div>
 
       <!-- Main Body: Responsive side-by-side on wide screens (lg:), tabbed on mobile -->
-      <main class="flex-1 overflow-y-auto p-4 min-w-0">
+      <main class="min-w-0">
         <form
           id="policy-editor-group-form"
           class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start min-w-0"
           @submit.prevent="handleSave"
         >
+          <fieldset :disabled="busy" class="contents">
           <!-- Left Column: Source Pipeline Editor (7 cols on lg) -->
           <div
+            id="policy-source-panel"
+            role="tabpanel"
+            aria-labelledby="policy-source-tab"
+            tabindex="0"
             class="lg:col-span-7 space-y-4 min-w-0"
             :class="{ 'hidden lg:block': activeSheetTab !== 'editor' }"
           >
@@ -447,6 +457,10 @@ function handleDiscardSourceDraft() {
 
           <!-- Right Column: Live Snapshot Preview Panel (5 cols on lg) -->
           <div
+            id="policy-preview-panel"
+            role="tabpanel"
+            aria-labelledby="policy-preview-tab"
+            tabindex="0"
             class="lg:col-span-5 sticky top-0 min-w-0"
             :class="{ 'hidden lg:block': activeSheetTab !== 'preview' }"
           >
@@ -460,9 +474,13 @@ function handleDiscardSourceDraft() {
               @refresh="handleRefreshPreview"
             />
           </div>
+          </fieldset>
         </form>
       </main>
+      </div>
 
+      <template #footer>
+      <div class="w-full space-y-3">
       <!-- Pending source draft banner -->
       <div
         v-if="draft.hasPendingSourceDraft.value"
@@ -474,6 +492,7 @@ function handleDiscardSourceDraft() {
           <button
             type="button"
             class="btn btn-ghost btn-xs condition-action-btn"
+            :disabled="busy"
             @click="handleDiscardSourceDraft"
           >
             放弃来源草稿
@@ -483,7 +502,7 @@ function handleDiscardSourceDraft() {
       </div>
 
       <!-- Sheet Footer: Cancel & Atomic Save -->
-      <footer class="p-4 border-t border-base-300 flex items-center justify-between gap-3 shrink-0 bg-base-100">
+      <footer class="pt-3 border-t border-base-300 flex flex-wrap items-center justify-between gap-3">
         <div class="text-xs text-base-content/60 font-mono truncate">
           <span v-if="draft.isDirty.value" class="text-warning font-semibold">
             ● {{ uiText('草稿已修改', 'Unsaved changes') }}
@@ -497,6 +516,7 @@ function handleDiscardSourceDraft() {
           <button
             type="button"
             class="btn btn-ghost btn-sm"
+            :disabled="busy"
             @click="handleClose"
           >
             {{ uiText('取消', 'Cancel') }}
@@ -508,13 +528,14 @@ function handleDiscardSourceDraft() {
             data-testid="policy-sheet-save-btn"
             class="btn btn-primary btn-sm"
             :class="{ loading: saving }"
-            :disabled="saving || !draft.name.value.trim() || draft.hasInvalidFilterSources.value || topologyStatus !== 'ready'"
+            :disabled="busy || !draft.name.value.trim() || draft.hasInvalidFilterSources.value || topologyStatus !== 'ready'"
             @click.prevent="handleSave"
           >
             {{ mode === 'edges' ? uiText('保存来源', 'Save Sources') : (group ? uiText('保存策略组', 'Save Group') : uiText('创建策略组', 'Create Group')) }}
           </button>
         </div>
       </footer>
-    </section>
-  </Transition>
+      </div>
+      </template>
+  </Drawer>
 </template>

@@ -43,6 +43,9 @@ describe('PolicyView Topology & Drawer Linkage', () => {
       if (path === '/api/v1/policies/groups') {
         return { items: [...mockGroups], total: 2 }
       }
+      if (path === '/api/v1/policies/global-node-filter') {
+        return { spec: { conditions: [] }, empty_fallback_pass: true, updated_at: 'now' }
+      }
       if (path === '/api/v1/policies/rules') {
         return { items: [], total: 0 }
       }
@@ -171,9 +174,10 @@ describe('PolicyView Topology & Drawer Linkage', () => {
 
     const dialog = document.body.querySelector('[role="dialog"]')
     expect(dialog).not.toBeNull()
-    // Verify fluid responsive viewport styling is applied to the sheet dialog
+    // Drawer owns the overlay surface and keeps a bounded, scrollable body.
     expect(dialog?.className).toContain('adaptive-surface-sheet')
-    expect(dialog?.className).toContain('md:max-h-[85vh]')
+    expect(dialog?.className).toContain('md:max-w-4xl')
+    expect(dialog?.className).toContain('lg:max-w-6xl')
   })
 
   it('renders ErrorStateCard degraded card on fetch failure and provides retry', async () => {
@@ -234,25 +238,20 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     expect(modal?.textContent).not.toContain('通过准入的节点')
     expect(modal?.textContent).toContain('全局节点筛选')
 
-    // Add a condition
-    const inputs = modal?.querySelectorAll('input')
-    const addBtn = Array.from(modal?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('添加条件'))
-    expect(addBtn).toBeDefined()
-
-    if (inputs && inputs.length > 0) {
-      inputs[0].value = 'premium'
-      inputs[0].dispatchEvent(new Event('input'))
-    }
-    addBtn?.click()
+    // The Policy shortcut uses the same validated settings editor.
+    const emptyPass = modal?.querySelector('[data-testid="global-empty-pass"]') as HTMLInputElement
+    expect(emptyPass).toBeTruthy()
+    emptyPass.click()
     await nextTick()
 
-    // Click Save Global Filter button
-    const saveBtn = Array.from(modal?.querySelectorAll('button') || []).find((b) => b.textContent?.includes('保存全局筛选'))
-    expect(saveBtn).toBeDefined()
-    saveBtn?.click()
+    const saveBtn = modal?.querySelector('[data-testid="filter-save"]') as HTMLButtonElement
+    expect(saveBtn).toBeTruthy()
+    saveBtn.click()
     await nextTick()
 
-    expect(putSpy).toHaveBeenCalledWith('/api/v1/policies/global-node-filter', expect.any(Object))
+    expect(putSpy).toHaveBeenCalledWith('/api/v1/policies/global-node-filter', {
+      spec: { conditions: [] }, empty_fallback_pass: false,
+    })
   })
 
   it('renders GroupCard with custom filter conditions and dynamic pool indicator when expanded', async () => {
@@ -321,7 +320,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     await mountPolicyView()
     ;(container.querySelector('[data-testid="group-card"] .cursor-pointer') as HTMLElement).click()
     await nextTick()
-    const dialog = container.querySelector('[role="dialog"]')!
+    const dialog = document.body.querySelector('[role="dialog"]')!
     expect(dialog.querySelector('[data-testid="empty-fallback-pass"]')).toBeNull()
     ;(dialog.querySelector('[data-testid="group-card"] .cursor-pointer') as HTMLElement | null)?.click()
     const op = Array.from(dialog.querySelectorAll('select')).find((s) => s.value === 'not_regex')!
@@ -357,7 +356,7 @@ describe('PolicyView Topology & Drawer Linkage', () => {
     const manage = Array.from(container.querySelectorAll('[data-testid="group-card"] button')).find(b => b.textContent?.includes('管理来源')) as HTMLButtonElement
     manage.click()
     await nextTick()
-    const dialog = container.querySelector('[role="dialog"]')!
+    const dialog = document.body.querySelector('[role="dialog"]')!
     const input = dialog.querySelector('[data-testid="condition-value"]') as HTMLInputElement
     input.value = '['
     input.dispatchEvent(new Event('input'))

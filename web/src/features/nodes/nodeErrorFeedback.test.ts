@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setImmediate } from 'node:timers'
-import { createApp, h, nextTick, reactive, ref } from 'vue'
+import { createApp, h, nextTick, ref } from 'vue'
+import { createMemoryHistory, createRouter, RouterView, type Router } from 'vue-router'
 import { api, ApiError } from '../../api/client'
 import { setLocale } from '../../locales'
 import { toastStore } from '../../ui/toast'
@@ -12,13 +13,6 @@ import type { NodeRecord } from './nodeView'
 
 vi.mock('../../locales/redesign', () => ({
   uiText: (zh: string, _en: string) => zh,
-}))
-
-const testRoute = reactive<{ query: Record<string, string> }>({ query: {} })
-
-vi.mock('vue-router', () => ({
-  useRoute: () => testRoute,
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }))
 
 vi.mock('../../ui/PageToolbar.vue', () => ({
@@ -37,16 +31,22 @@ vi.mock('../../ui/PageToolbar.vue', () => ({
 describe('FR-RM3 Node Detail Error Differentiation & Stale Feedback', () => {
   let container: HTMLDivElement
   let app: ReturnType<typeof createApp> | null = null
+  let router: Router
 
-  beforeEach(() => {
+  beforeEach(async () => {
     container = document.createElement('div')
     document.body.appendChild(container)
     localStorage.clear()
     sessionStorage.clear()
     toastStore.clear()
     setLocale('zh-CN')
-    testRoute.query = {}
     vi.restoreAllMocks()
+    router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/nodes', component: NodesView }],
+    })
+    await router.push('/nodes')
+    await router.isReady()
   })
 
   afterEach(() => {
@@ -251,12 +251,13 @@ describe('FR-RM3 Node Detail Error Differentiation & Stale Feedback', () => {
       if (path === '/api/v1/nodes/node-newer') return { node: newerNode }
       return {}
     })
-    app = createApp({ render: () => h(NodesView) })
+    app = createApp({ render: () => h(RouterView) })
+    app.use(router)
     app.mount(container)
     await vi.waitFor(() => expect(container.querySelector('[data-testid="nodes-total-badge"]')?.textContent).toContain(cachedTarget ? '1' : '0'))
-    testRoute.query = { node: 'node-older' }
+    await router.replace({ query: { node: 'node-older' } })
     await vi.waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/nodes/node-older'))
-    testRoute.query = { node: 'node-newer' }
+    await router.replace({ query: { node: 'node-newer' } })
     await vi.waitFor(() => expect(document.body.querySelector('[data-testid="node-detail-drawer"]')?.textContent).toContain('Newer Node'))
 
     if (completion === 'failure') rejectOld(new ApiError(500, 'server_error', 'Late older request failed'))
@@ -282,12 +283,13 @@ describe('FR-RM3 Node Detail Error Differentiation & Stale Feedback', () => {
       if (path === '/api/v1/nodes/node-cleared') return oldRequest
       return {}
     })
-    app = createApp({ render: () => h(NodesView) })
+    app = createApp({ render: () => h(RouterView) })
+    app.use(router)
     app.mount(container)
     await vi.waitFor(() => expect(container.querySelector('[data-testid="nodes-total-badge"]')?.textContent).toContain('0'))
-    testRoute.query = { node: 'node-cleared' }
+    await router.replace({ query: { node: 'node-cleared' } })
     await vi.waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/nodes/node-cleared'))
-    testRoute.query = {}
+    await router.replace({ query: {} })
     await nextTick()
 
     if (completion === 'failure') rejectOld(new ApiError(500, 'server_error', 'Late cleared request failed'))

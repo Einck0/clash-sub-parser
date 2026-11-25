@@ -5,6 +5,7 @@ import { uiText } from '../../locales/redesign'
 import {
   type DnsGroupDef,
   countGroupConfigured,
+  matchesDnsField,
 } from './dnsFields'
 import DnsFieldControl from './DnsFieldControl.vue'
 
@@ -16,12 +17,14 @@ const props = withDefaults(
     invalidMappingInputs?: Record<string, string>
     disabled?: boolean
     defaultOpen?: boolean
+    search?: string
   }>(),
   {
     fieldErrors: () => ({}),
     invalidMappingInputs: () => ({}),
     disabled: false,
     defaultOpen: false,
+    search: '',
   }
 )
 
@@ -49,6 +52,7 @@ const configuredCount = computed(() => {
 const hasErrorInGroup = computed(() => {
   return props.group.fields.some((f) => Boolean(props.fieldErrors[f.key]))
 })
+const expanded = computed(() => isOpen.value || Boolean(props.search.trim()) || hasErrorInGroup.value)
 </script>
 
 <template>
@@ -60,7 +64,7 @@ const hasErrorInGroup = computed(() => {
     <button
       type="button"
       class="w-full flex items-center justify-between p-3 sm:p-4 text-left cursor-pointer hover:bg-base-200/80 transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40 rounded-xl"
-      :aria-expanded="isOpen"
+      :aria-expanded="expanded"
       :aria-controls="`group-content-${group.id}`"
       :data-testid="`dns-group-toggle-${group.id}`"
       @click="toggleOpen"
@@ -96,7 +100,7 @@ const hasErrorInGroup = computed(() => {
           </span>
         </div>
 
-        <p class="text-[11px] text-base-content/60 leading-tight mt-1 truncate">
+        <p class="text-[11px] text-base-content/60 leading-relaxed mt-1 break-words">
           {{ uiText(group.descZh, group.descEn) }}
         </p>
       </div>
@@ -104,7 +108,7 @@ const hasErrorInGroup = computed(() => {
       <div class="shrink-0 flex items-center">
         <ChevronDownIcon
           class="w-4 h-4 text-base-content/60 transition-transform duration-200"
-          :class="{ 'rotate-180': isOpen }"
+          :class="{ 'rotate-180': expanded }"
           aria-hidden="true"
         />
       </div>
@@ -112,7 +116,7 @@ const hasErrorInGroup = computed(() => {
 
     <!-- Disclosed Content -->
     <div
-      v-show="isOpen"
+      v-show="expanded"
       :id="`group-content-${group.id}`"
       class="p-3 sm:p-4 border-t border-base-300/60"
       :data-testid="`dns-group-content-${group.id}`"
@@ -120,6 +124,7 @@ const hasErrorInGroup = computed(() => {
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
         <DnsFieldControl
           v-for="field in group.fields"
+          v-show="matchesDnsField(field, search) || Boolean(fieldErrors[field.key])"
           :key="field.key"
           :field="field"
           :draft="draft"

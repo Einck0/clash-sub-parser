@@ -75,6 +75,22 @@ describe('ConfirmModal Component', () => {
     }
   }
 
+  it('uses instance-specific titles and descriptions for concurrent confirmations', async () => {
+    app = createApp({ render: () => [
+      h(ConfirmModal, { modelValue: true, title: 'Delete source', message: 'Remove this source?' }),
+      h(ConfirmModal, { modelValue: false, title: 'Discard draft', message: 'Discard changes?' }),
+    ] })
+    app.mount(container)
+    await nextTick()
+    const dialogs = [...container.querySelectorAll('dialog')]
+    for (const attribute of ['aria-labelledby', 'aria-describedby']) {
+      const ids = dialogs.map((dialog) => dialog.getAttribute(attribute)!)
+      expect(new Set(ids).size).toBe(2)
+      expect(ids.every((id) => document.getElementById(id))).toBe(true)
+    }
+    expect(document.getElementById(dialogs[0]!.getAttribute('aria-labelledby')!)?.textContent?.trim()).toBe('Delete source')
+  })
+
   it('renders modal open when modelValue is true and closes when false', async () => {
     const { propsState, getModal } = mountModal({ modelValue: true })
     expect(getModal()).toBeTruthy()

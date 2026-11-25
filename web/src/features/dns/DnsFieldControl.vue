@@ -164,7 +164,7 @@ function onYamlInput(e: Event) {
 
 <template>
   <div
-    class="flex flex-col gap-2 p-3 sm:p-4 rounded-xl bg-base-100/70 border border-base-300 shadow-xs transition-colors"
+    class="flex min-w-0 flex-col gap-2 p-3 sm:p-4 rounded-xl bg-base-100/70 border border-base-300 shadow-xs transition-colors"
     :class="{ 'border-error/50 bg-error/5': fieldError }"
   >
     <!-- Label & Header Row -->
@@ -177,7 +177,7 @@ function onYamlInput(e: Event) {
           <span class="text-xs sm:text-sm font-semibold text-base-content/90">
             {{ uiText(field.labelZh, field.labelEn) }}
           </span>
-          <code class="font-mono text-[10px] sm:text-[11px] opacity-70 bg-base-300/50 px-1 py-0.5 rounded">
+          <code class="font-mono text-[10px] sm:text-[11px] opacity-70 bg-base-300/50 px-1 py-0.5 rounded break-all">
             {{ field.key }}
           </code>
         </label>
@@ -258,6 +258,7 @@ function onYamlInput(e: Event) {
               :data-testid="`dns-list-remove-${field.key}-${idx}`"
               :disabled="disabled"
               :title="uiText('删除此项', 'Remove this entry')"
+              :aria-label="uiText('删除 ' + field.key + ' 第 ' + (idx + 1) + ' 项', 'Remove ' + field.key + ' entry ' + (idx + 1))"
               @click="onRemoveItem(idx)"
             >
               <XMarkIcon class="w-3 h-3" />
@@ -270,8 +271,9 @@ function onYamlInput(e: Event) {
           <input
             v-model="newItemInput"
             type="text"
-            class="input input-sm font-mono text-xs flex-1 bg-base-100 border border-base-300 rounded-lg focus:border-primary"
+            class="input input-sm font-mono text-xs min-w-0 flex-1 bg-base-100 border border-base-300 rounded-lg focus:border-primary"
             :data-testid="`dns-list-new-${field.key}`"
+            :aria-label="uiText('添加 ' + field.key + ' 条目', 'Add ' + field.key + ' entry')"
             :placeholder="uiText('输入单项或直接在此粘贴多行条目…', 'Enter entry or paste multiline entries here…')"
             :disabled="disabled"
             @keydown.enter.prevent="onAddItem"
@@ -407,6 +409,8 @@ function onYamlInput(e: Event) {
           :id="`field-${field.key}`"
           class="textarea textarea-sm min-h-24 font-mono text-xs w-full bg-base-100 border border-base-300 rounded-lg focus:border-primary"
           :class="{ 'textarea-error border-error': fieldError }"
+          :aria-invalid="Boolean(fieldError)"
+          :aria-describedby="fieldError ? `field-error-${field.key}` : undefined"
           :aria-label="field.key"
           :data-testid="`dns-yaml-${field.key}`"
           :value="getYamlText(field.key)"
@@ -416,7 +420,7 @@ function onYamlInput(e: Event) {
           @input="onYamlInput"
           @change="onYamlInput"
         />
-        <div v-if="fieldError" class="text-error text-xs font-medium flex items-center gap-1 mt-1" data-testid="field-error">
+        <div v-if="fieldError" :id="`field-error-${field.key}`" role="alert" class="text-error text-xs font-medium mt-1 min-w-0 break-words [overflow-wrap:anywhere]" data-testid="field-error">
           <span>⚠ {{ fieldError }}</span>
         </div>
       </template>

@@ -18,6 +18,12 @@ export interface DnsFieldDef {
   options?: DnsFieldOption[]
 }
 
+export function matchesDnsField(field: DnsFieldDef, query: string): boolean {
+  const text = query.trim().toLowerCase()
+  return !text || [field.key, field.labelZh, field.labelEn, field.descZh, field.descEn]
+    .some((value) => value.toLowerCase().includes(text))
+}
+
 export type DnsGroupId = 'routing-policy' | 'dedicated-servers' | 'switches-hosts'
 
 export interface DnsGroupDef {

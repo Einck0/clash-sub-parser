@@ -1,7 +1,8 @@
 import { ref } from 'vue'
 import { api } from '../../api/client'
+import { uiText } from '../../locales'
 import { displayText } from '../../utils/displayNames'
-import type { DashboardMetrics, HealthStatus, MetricItem } from './dashboardTypes'
+import type { DashboardMetrics, HealthStatus } from './dashboardTypes'
 
 export function useDashboard() {
   const metrics = ref<DashboardMetrics>({
@@ -17,59 +18,28 @@ export function useDashboard() {
   const healthLatency = ref<number | null>(null)
   const refreshingHealth = ref(false)
   const isRefreshingStats = ref(false)
-
   let statsSeq = 0
   let healthSeq = 0
 
-  function extractTotal(val: any): number | null {
-    if (val && typeof val.total === 'number') return val.total
-    if (val && Array.isArray(val.items)) return val.items.length
-    if (val && Array.isArray(val.policy_rules)) return val.policy_rules.length
-    return null
-  }
-
-  function applyMetricResult(
-    key: keyof DashboardMetrics,
-    res: PromiseSettledResult<any>,
-    isRefresh: boolean
-  ): void {
+  function applyMetricResult(key: keyof DashboardMetrics, res: PromiseSettledResult<unknown>): void {
     const current = metrics.value[key]
-
-    if (res.status === 'fulfilled') {
-      const total = extractTotal(res.value)
-      if (total !== null) {
-        metrics.value[key] = {
-          value: total,
-          status: 'success',
-          error: null,
-          isStale: false,
-        }
-        return
-      }
+    const total = res.status === 'fulfilled' && res.value && typeof res.value === 'object' && 'total' in res.value
+      ? res.value.total
+      : null
+    if (typeof total === 'number' && Number.isSafeInteger(total) && total >= 0) {
+      metrics.value[key] = { value: total, status: 'success', error: null, isStale: false }
+      return
     }
 
-    // Either promise rejected, or returned value lacked a valid total
-    const errorMsg =
-      res.status === 'rejected'
-        ? displayText(res.reason?.message || 'Request failed')
-        : 'Invalid response format'
-
-    if (isRefresh && current.value !== null) {
-      // Preserve old value on refresh failure and flag as stale
-      metrics.value[key] = {
-        value: current.value,
-        status: 'error',
-        error: errorMsg,
-        isStale: true,
-      }
-    } else {
-      // Initial failure: do not display 0!
-      metrics.value[key] = {
-        value: null,
-        status: 'error',
-        error: errorMsg,
-        isStale: false,
-      }
+    // A page's item count is not a total; unavailable data must never masquerade as zero.
+    const error = res.status === 'rejected'
+      ? displayText(res.reason?.message || uiText('请求失败', 'Request failed'))
+      : uiText('返回的统计总数无效', 'Invalid response total')
+    metrics.value[key] = {
+      value: current.value,
+      status: 'error',
+      error,
+      isStale: current.value !== null,
     }
   }
 
@@ -77,67 +47,51 @@ export function useDashboard() {
     const seq = ++healthSeq
     refreshingHealth.value = true
     const start = Date.now()
-
     try {
       await api.get('/healthz')
-      if (seq !== healthSeq) return // Stale request discarded
+      if (seq !== healthSeq) return
       healthStatus.value = 'healthy'
       healthLatency.value = Math.max(0, Date.now() - start)
     } catch {
-      if (seq !== healthSeq) return // Stale request discarded
+      if (seq !== healthSeq) return
       healthStatus.value = 'unhealthy'
       healthLatency.value = null
     } finally {
-      if (seq === healthSeq) {
-        refreshingHealth.value = false
-      }
+      if (seq === healthSeq) refreshingHealth.value = false
     }
   }
 
   async function loadStats(isRefresh = false): Promise<void> {
     const seq = ++statsSeq
-    if (!isRefresh) {
-      for (const key of Object.keys(metrics.value) as Array<keyof DashboardMetrics>) {
-        metrics.value[key].status = 'loading'
-      }
-    } else {
-      isRefreshingStats.value = true
+    isRefreshingStats.value = true
+    for (const metric of Object.values(metrics.value)) {
+      if (!isRefresh || metric.value === null) metric.status = 'loading'
     }
 
+    const requests: Array<[keyof DashboardMetrics, () => Promise<unknown>]> = [
+      ['subscriptions', () => api.get('/api/v1/subscriptions', { params: { page: 1, page_size: 1 } })],
+      ['nodes', () => api.get('/api/v1/nodes', {
+        params: { page: 1, page_size: 1, scope: 'enabled_subscriptions' },
+      })],
+      ['activeNodes', () => api.get('/api/v1/nodes', {
+        params: { page: 1, page_size: 1, scope: 'enabled_subscriptions', active_only: 'true' },
+      })],
+      ['policies', () => api.get('/api/v1/policies/groups', { params: { page: 1, page_size: 1 } })],
+      ['rules', () => api.get('/api/v1/policies/rules', { params: { page: 1, page_size: 1 } })],
+      ['probes', () => api.get('/api/v1/probes/runs', { params: { page: 1, page_size: 1 } })],
+    ]
     try {
-      const [subsRes, nodesRes, activeNodesRes, policiesRes, rulesRes, probesRes] =
-        await Promise.allSettled([
-          api.get<{ total: number }>('/api/v1/subscriptions', { params: { page: 1, page_size: 1 } }),
-          api.get<{ total: number }>('/api/v1/nodes', {
-            params: { page: 1, page_size: 1, scope: 'enabled_subscriptions' },
-          }),
-          api.get<{ total: number }>('/api/v1/nodes', {
-            params: { page: 1, page_size: 1, scope: 'enabled_subscriptions', active_only: 'true' },
-          }),
-          api.get<{ total: number }>('/api/v1/policies/groups', {
-            params: { page: 1, page_size: 1 },
-          }),
-          api.get<{ total: number }>('/api/v1/policies/rules', {
-            params: { page: 1, page_size: 1 },
-          }),
-          api.get<{ total: number }>('/api/v1/probes/runs', { params: { page: 1, page_size: 1 } }),
-        ])
-
-      // Stale response discarded: a newer request was dispatched while this was in flight
-      if (seq !== statsSeq) {
-        return
-      }
-
-      applyMetricResult('subscriptions', subsRes, isRefresh)
-      applyMetricResult('nodes', nodesRes, isRefresh)
-      applyMetricResult('activeNodes', activeNodesRes, isRefresh)
-      applyMetricResult('policies', policiesRes, isRefresh)
-      applyMetricResult('rules', rulesRes, isRefresh)
-      applyMetricResult('probes', probesRes, isRefresh)
+      await Promise.allSettled(requests.map(async ([key, request]) => {
+        // Publish each section as it settles; one stalled service cannot hide the others.
+        try {
+          const value = await request()
+          if (seq === statsSeq) applyMetricResult(key, { status: 'fulfilled', value })
+        } catch (reason) {
+          if (seq === statsSeq) applyMetricResult(key, { status: 'rejected', reason })
+        }
+      }))
     } finally {
-      if (seq === statsSeq) {
-        isRefreshingStats.value = false
-      }
+      if (seq === statsSeq) isRefreshingStats.value = false
     }
   }
 

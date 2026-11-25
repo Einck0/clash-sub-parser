@@ -24,6 +24,7 @@ import ConfirmModal from '../../ui/ConfirmModal.vue'
 import { toastStore } from '../../ui/toast'
 import { t } from '../../locales'
 import { displayText } from '../../utils/displayNames'
+import { uiText } from '../../locales/redesign'
 
 const {
   categories,
@@ -37,6 +38,7 @@ const {
   saving,
   validating,
   error,
+  refreshRequired,
   searchQuery,
   selectedCategoryId,
   validationResult,
@@ -57,6 +59,39 @@ const {
   validateRules,
   syncToUrl,
 } = useRules()
+
+const ruleSaveError = ref('')
+const categorySaveError = ref('')
+const actionError = ref('')
+const actionNotice = ref('')
+
+async function handleToggleRule(rule: PolicyRuleView) {
+  if (saving.value) return
+  actionError.value = ''
+  actionNotice.value = ''
+  const enabled = !rule.enabled
+  try {
+    await toggleRuleEnabled(rule)
+    validationResult.value = null
+    if (!refreshRequired.value) actionNotice.value = enabled
+      ? uiText('规则已启用，后续实时导出会使用它。', 'Rule enabled; live exports will use it.')
+      : uiText('规则已停用，仍保留在列表中，但不参与实际导出。', 'Rule disabled; it remains editable here but is excluded from exports.')
+  } catch (err) {
+    actionError.value = displayText(err instanceof Error ? err.message : t('common.error'))
+  }
+}
+async function handleMoveRule(id: string, direction: 'up' | 'down') {
+  try { await moveRule(id, direction); validationResult.value = null }
+  catch (err) { actionError.value = displayText(err instanceof Error ? err.message : t('common.error')) }
+}
+async function handleMoveCategory(id: string, direction: 'up' | 'down') {
+  categorySaveError.value = ''
+  try { await moveCategory(id, direction) }
+  catch (err) {
+    categorySaveError.value = displayText(err instanceof Error ? err.message : t('common.error'))
+    actionError.value = categorySaveError.value
+  }
+}
 
 onMounted(async () => {
   try {
@@ -116,32 +151,36 @@ const editingRule = ref<PolicyRuleView | null>(null)
 const defaultCategoryIdForNew = ref<string | undefined>(undefined)
 
 function openCreateRuleModal(categoryId?: string) {
+  if (refreshRequired.value || loading.value || saving.value) return
+  ruleSaveError.value = ''
   editingRule.value = null
   defaultCategoryIdForNew.value = categoryId || selectedCategoryId.value || categories.value[0]?.id
   ruleModalOpen.value = true
 }
 
 function openEditRuleModal(rule: PolicyRuleView) {
+  if (refreshRequired.value || loading.value || saving.value) return
+  ruleSaveError.value = ''
   editingRule.value = rule
   ruleModalOpen.value = true
 }
 
 async function handleSaveRule(payload: CreateRulePayload | UpdateRulePayload) {
+  if (saving.value) return
+  ruleSaveError.value = ''
   try {
     if (editingRule.value) {
       await updateRule(editingRule.value.id, payload)
-      toastStore.push({ message: t('common.success'), tone: 'success' })
+      if (!refreshRequired.value) toastStore.push({ message: t('common.success'), tone: 'success' })
     } else {
       await createRule(payload as CreateRulePayload)
-      toastStore.push({ message: t('common.success'), tone: 'success' })
+      if (!refreshRequired.value) toastStore.push({ message: t('common.success'), tone: 'success' })
     }
     ruleModalOpen.value = false
     editingRule.value = null
+    validationResult.value = null
   } catch (err) {
-    toastStore.push({
-      message: err instanceof Error ? err.message : t('common.error'),
-      tone: 'error',
-    })
+    ruleSaveError.value = displayText(err instanceof Error ? err.message : t('common.error'))
   }
 }
 
@@ -158,58 +197,61 @@ async function handleDeleteRule() {
   if (!ruleToDelete.value) return
   try {
     await deleteRule(ruleToDelete.value.id)
-    toastStore.push({ message: t('common.success'), tone: 'success' })
+    deleteRuleConfirmOpen.value = false
+    ruleToDelete.value = null
+    validationResult.value = null
+    if (!refreshRequired.value) toastStore.push({ message: t('common.success'), tone: 'success' })
   } catch (err) {
     toastStore.push({
       message: err instanceof Error ? err.message : t('common.error'),
       tone: 'error',
     })
-  } finally {
-    deleteRuleConfirmOpen.value = false
-    ruleToDelete.value = null
   }
 }
 
 // Category Management Modal
 const categoryModalOpen = ref(false)
+const categoryModal = ref<{
+  createSucceeded: () => void
+  updateSucceeded: () => void
+  deleteSucceeded: () => void
+} | null>(null)
 
 function openCategoryModal() {
+  categorySaveError.value = ''
   categoryModalOpen.value = true
 }
 
 async function handleCreateCategory(payload: CreateCategoryPayload) {
+  categorySaveError.value = ''
   try {
     await createCategory(payload)
-    toastStore.push({ message: t('common.success'), tone: 'success' })
+    categoryModal.value?.createSucceeded()
+    if (!refreshRequired.value) toastStore.push({ message: t('common.success'), tone: 'success' })
   } catch (err) {
-    toastStore.push({
-      message: err instanceof Error ? err.message : t('common.error'),
-      tone: 'error',
-    })
+    categorySaveError.value = displayText(err instanceof Error ? err.message : t('common.error'))
   }
 }
 
 async function handleUpdateCategory(id: string, payload: UpdateCategoryPayload) {
+  categorySaveError.value = ''
   try {
     await updateCategory(id, payload)
-    toastStore.push({ message: t('common.success'), tone: 'success' })
+    categoryModal.value?.updateSucceeded()
+    if (!refreshRequired.value) toastStore.push({ message: t('common.success'), tone: 'success' })
   } catch (err) {
-    toastStore.push({
-      message: err instanceof Error ? err.message : t('common.error'),
-      tone: 'error',
-    })
+    categorySaveError.value = displayText(err instanceof Error ? err.message : t('common.error'))
   }
 }
 
 async function handleDeleteCategory(cat: RuleCategory) {
+  categorySaveError.value = ''
   try {
     await deleteCategory(cat.id)
-    toastStore.push({ message: t('common.success'), tone: 'success' })
+    categoryModal.value?.deleteSucceeded()
+    if (!refreshRequired.value) toastStore.push({ message: t('common.success'), tone: 'success' })
   } catch (err) {
-    toastStore.push({
-      message: err instanceof Error ? err.message : t('common.error'),
-      tone: 'error',
-    })
+    categorySaveError.value = displayText(err instanceof Error ? err.message : t('common.error'))
   }
 }
 
@@ -223,7 +265,7 @@ function confirmBackfill() {
 async function handleBackfill() {
   try {
     const res = await backfillRules()
-    toastStore.push({
+    if (!refreshRequired.value) toastStore.push({
       message: t('rules.backfillSuccess', { count: res.count }),
       tone: 'success',
     })
@@ -254,6 +296,10 @@ async function handleValidateRules() {
   }
 }
 
+async function retryLoad() {
+  try { await loadData() } catch { /* The persistent read error stays visible. */ }
+}
+
 function handleClearSearch() {
   searchQuery.value = ''
   selectedCategoryId.value = null
@@ -272,7 +318,7 @@ function handleClearSearch() {
       :filtered-count="filteredRules.length"
       :is-searching="isSearching"
       :loading="loading"
-      :saving="saving"
+      :saving="saving || refreshRequired"
       :validating="validating"
       @new-rule="openCreateRuleModal()"
       @manage-categories="openCategoryModal"
@@ -282,6 +328,9 @@ function handleClearSearch() {
       @collapse-all="collapseAll"
       @clear-search="handleClearSearch"
     />
+
+    <p v-if="actionNotice" role="status" class="alert alert-success text-sm break-words" data-testid="rule-action-notice">{{ actionNotice }}</p>
+    <p v-if="actionError" role="alert" class="alert alert-error text-sm break-words" data-testid="rule-action-error">{{ actionError }}</p>
 
     <!-- Topology Validation Banner (if executed) -->
     <div
@@ -313,14 +362,15 @@ function handleClearSearch() {
 
     <!-- Error Banner (if initial load failed and no cached rules exist) -->
     <div
-      v-if="error && rules.length === 0"
-      class="alert alert-error/15 border border-error/30 text-error-content p-4 rounded-xl flex items-center justify-between"
+      v-if="error"
+      class="alert alert-error/15 border border-error/30 text-error-content p-4 rounded-xl flex flex-wrap items-center justify-between gap-2"
+      role="alert"
     >
-      <div class="flex items-center gap-2">
+      <div class="flex min-w-0 items-center gap-2">
         <ExclamationTriangleIcon class="w-5 h-5 text-error shrink-0" />
-        <span class="text-xs">{{ displayText(error) }}</span>
+        <span class="text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{ displayText(error) }}</span>
       </div>
-      <button type="button" class="btn btn-xs btn-outline" @click="loadData">
+      <button type="button" class="btn btn-xs btn-outline" :disabled="loading || saving" @click="retryLoad">
         {{ t('common.retry') || 'Retry' }}
       </button>
     </div>
@@ -348,13 +398,14 @@ function handleClearSearch() {
           :search-query="searchQuery"
           :group-name-map="groupNameMap"
           :collapsed-categories="collapsedCategories"
+          :busy="saving || loading || refreshRequired"
           @toggle-collapse="toggleCategoryCollapse"
           @create-rule-for-category="openCreateRuleModal"
           @edit-rule="openEditRuleModal"
           @delete-rule="confirmDeleteRule"
-          @move-rule="moveRule"
-          @toggle-enabled="toggleRuleEnabled"
-          @move-category="moveCategory"
+          @move-rule="handleMoveRule"
+          @toggle-enabled="handleToggleRule"
+          @move-category="handleMoveCategory"
           @clear-search="handleClearSearch"
         />
       </main>
@@ -368,18 +419,23 @@ function handleClearSearch() {
       :categories="sortedCategories"
       :groups="groups"
       :saving="saving"
+      :error="ruleSaveError"
       @save="handleSaveRule"
     />
 
     <!-- Category Management Modal -->
     <RuleCategoryModal
+      ref="categoryModal"
       v-model="categoryModalOpen"
       :categories="sortedCategories"
       :saving="saving"
+      :blocked="loading || refreshRequired"
+      :error="categorySaveError || error || ''"
+      @retry="retryLoad"
       @create-category="handleCreateCategory"
       @update-category="handleUpdateCategory"
       @delete-category="handleDeleteCategory"
-      @move-category="moveCategory"
+      @move-category="handleMoveCategory"
     />
 
     <!-- Delete Rule Confirm Modal -->

@@ -1,3 +1,4 @@
+import { uiText } from '../../locales/redesign'
 import type { ToastTone } from '../../ui/toast'
 
 export type RelationState = 'verified' | 'conflict' | 'unknown'
@@ -47,33 +48,33 @@ export function attributionStatusBadge(status: AttributionStatus | undefined): {
 } {
   switch (status) {
     case 'current':
-      return { label: '当前实时归属', tone: 'success' }
+      return { label: uiText('当前实时归属', 'Current attribution'), tone: 'success' }
     case 'historical_verified':
-      return { label: '历史已核验归属', tone: 'info' }
+      return { label: uiText('历史已核验归属', 'Verified historical attribution'), tone: 'info' }
     case 'manual_confirmed':
-      return { label: '人工已核验归属', tone: 'success' }
+      return { label: uiText('人工已核验归属', 'Manually confirmed attribution'), tone: 'success' }
     case 'conflict':
-      return { label: '归属存在冲突', tone: 'warning' }
+      return { label: uiText('归属存在冲突', 'Attribution conflict'), tone: 'warning' }
     case 'unknown':
     default:
-      return { label: '来源证据不足', tone: 'info' }
+      return { label: uiText('来源证据不足', 'Insufficient source evidence'), tone: 'info' }
   }
 }
 
 export function attributionCauseLabel(cause: AttributionCause | string | undefined): string {
   switch (cause) {
     case 'legacy_import':
-      return '历史系统导入'
+      return uiText('历史系统导入', 'Imported from legacy system')
     case 'refresh_removed':
-      return '刷新下线移除'
+      return uiText('刷新下线移除', 'Removed during refresh')
     case 'subscription_deleted':
-      return '订阅源已删除'
+      return uiText('订阅源已删除', 'Subscription source deleted')
     case 'manual_confirmed':
-      return '人工核验确认'
+      return uiText('人工核验确认', 'Manually confirmed')
     case 'unresolved':
-      return '未决归属'
+      return uiText('未决归属', 'Unresolved attribution')
     default:
-      return cause || '未留记录'
+      return cause || uiText('未留记录', 'No record')
   }
 }
 
@@ -83,23 +84,23 @@ export function relationStateBadge(state: RelationState | string | undefined): {
 } {
   switch (state) {
     case 'verified':
-      return { label: '已核验', tone: 'success' }
+      return { label: uiText('已核验', 'Verified'), tone: 'success' }
     case 'conflict':
-      return { label: '冲突', tone: 'warning' }
+      return { label: uiText('冲突', 'Conflict'), tone: 'warning' }
     case 'unknown':
     default:
-      return { label: '待核验/未知', tone: 'info' }
+      return { label: uiText('待核验/未知', 'Pending verification / unknown'), tone: 'info' }
   }
 }
 
 export function formatObservedTime(isoStr?: string | null): string {
   if (!isoStr || typeof isoStr !== 'string' || !isoStr.trim()) {
-    return '未留记录'
+    return uiText('未留记录', 'No record')
   }
   try {
     const d = new Date(isoStr)
-    if (Number.isNaN(d.getTime())) return '未留记录'
-    return d.toLocaleString('zh-CN', {
+    if (Number.isNaN(d.getTime())) return uiText('未留记录', 'No record')
+    return d.toLocaleString(uiText('zh-CN', 'en-US'), {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -109,6 +110,6 @@ export function formatObservedTime(isoStr?: string | null): string {
       hour12: false,
     })
   } catch {
-    return '未留记录'
+    return uiText('未留记录', 'No record')
   }
 }

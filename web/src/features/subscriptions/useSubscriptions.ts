@@ -3,6 +3,7 @@ import { api } from '../../api/client'
 import { toastStore } from '../../ui/toast'
 import { generateUUID } from '../../utils/uuid'
 import { t } from '../../locales'
+import { uiText } from '../../locales/redesign'
 import { displayText } from '../../utils/displayNames'
 
 export { generateUUID }
@@ -266,6 +267,8 @@ export function useSubscriptions() {
   const page = ref(1)
   const pageSize = 50
   const total = ref(0)
+  const searchText = ref('')
+  const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
   const hasItems = computed(() => items.value.length > 0)
   const refreshingIDs = ref(new Set<string>())
@@ -300,13 +303,13 @@ export function useSubscriptions() {
         }
       )
       toastStore.push({
-        message: '已设为主订阅',
+        message: uiText('已设为主订阅', 'Primary subscription updated'),
         tone: 'success',
       })
-      await load()
+      await reloadAfterMutation()
       return true
     } catch (cause) {
-      const msg = displayText(cause instanceof Error ? cause.message : '设置主订阅失败')
+      const msg = displayText(cause instanceof Error ? cause.message : uiText('设置主订阅失败', 'Failed to set primary subscription'))
       setRowError(subscription.id, msg)
       toastStore.push({
         message: msg,
@@ -327,15 +330,19 @@ export function useSubscriptions() {
     error.value = ''
     try {
       const result = await api.get<Page<SubscriptionRecord>>('/api/v1/subscriptions', {
-        params: { page: page.value, page_size: pageSize },
+        params: { page: page.value, page_size: pageSize, search_text: searchText.value || undefined },
       })
       if (thisSeq !== loadSequence) return false
       items.value = result?.items ?? []
       total.value = result?.total ?? items.value.length
+      if (page.value > pageCount.value) {
+        page.value = pageCount.value
+        return load()
+      }
       return true
     } catch (cause) {
       if (thisSeq !== loadSequence) return false
-      error.value = displayText(cause instanceof Error ? cause.message : '加载订阅源列表失败')
+      error.value = displayText(cause instanceof Error ? cause.message : uiText('加载订阅源列表失败', 'Failed to load subscriptions'))
       return false
     } finally {
       if (thisSeq === loadSequence) {
@@ -344,21 +351,47 @@ export function useSubscriptions() {
     }
   }
 
-  async function save(draft: SubscriptionDraft, current?: SubscriptionRecord) {
+  async function setPage(nextPage: number) {
+    page.value = Math.max(1, Math.min(pageCount.value, nextPage))
+    items.value = []
+    return load()
+  }
+
+  async function search(value: string) {
+    searchText.value = value.trim()
+    page.value = 1
+    items.value = []
+    return load()
+  }
+
+  async function reloadAfterMutation() {
+    const ok = await load()
+    if (!ok && error.value) {
+      toastStore.push({
+        message: uiText(`操作已完成，但刷新列表失败: ${error.value}`, `The change succeeded, but reloading the list failed: ${error.value}`),
+        tone: 'warning',
+      })
+    }
+    return ok
+  }
+
+  async function save(draft: SubscriptionDraft, current?: SubscriptionRecord): Promise<boolean> {
+    if (saving.value) return false
     saving.value = true
     try {
       if (current) {
         await api.patch(`/api/v1/subscriptions/${encodeURIComponent(current.id)}`, subscriptionPatchPayload(draft), {
           headers: { 'If-Match': current.revision },
         })
-        toastStore.push({ message: '订阅源已更新', tone: 'success' })
+        toastStore.push({ message: uiText('订阅源已更新', 'Subscription updated'), tone: 'success' })
       } else {
         await api.post('/api/v1/subscriptions', draft)
-        toastStore.push({ message: '订阅源已添加', tone: 'success' })
+        toastStore.push({ message: uiText('订阅源已添加', 'Subscription added'), tone: 'success' })
       }
-      await load()
+      await reloadAfterMutation()
+      return true
     } catch (cause) {
-      toastStore.push({ message: displayText(cause instanceof Error ? cause.message : '保存订阅源失败'), tone: 'error' })
+      toastStore.push({ message: displayText(cause instanceof Error ? cause.message : uiText('保存订阅源失败', 'Failed to save subscription')), tone: 'error' })
       throw cause
     } finally {
       saving.value = false
@@ -369,7 +402,7 @@ export function useSubscriptions() {
     try {
       await api.delete(`/api/v1/subscriptions/${encodeURIComponent(subscription.id)}`)
     } catch (cause) {
-      const msg = displayText(cause instanceof Error ? cause.message : '删除订阅源失败')
+      const msg = displayText(cause instanceof Error ? cause.message : uiText('删除订阅源失败', 'Failed to delete subscription'))
       toastStore.push({ message: msg, tone: 'error' })
       return { ok: false, error: msg }
     }
@@ -379,13 +412,13 @@ export function useSubscriptions() {
     items.value = items.value.filter((s) => s.id !== subscription.id)
     total.value = Math.max(0, total.value - 1)
 
-    toastStore.push({ message: '订阅源已删除', tone: 'success' })
+    toastStore.push({ message: uiText('订阅源已删除', 'Subscription deleted'), tone: 'success' })
     clearRowError(subscription.id)
 
     const reloadOk = await load()
     if (!reloadOk && error.value) {
       toastStore.push({
-        message: `订阅源已删除，但刷新列表失败: ${error.value}`,
+        message: uiText(`订阅源已删除，但刷新列表失败: ${error.value}`, `Subscription deleted, but reloading the list failed: ${error.value}`),
         tone: 'warning',
       })
     }
@@ -402,7 +435,7 @@ export function useSubscriptions() {
         headers: { 'Idempotency-Key': generateUUID() },
       })
       toastStore.push({ message: t('subscriptions.refreshCompleted'), tone: 'success' })
-      await load()
+      await reloadAfterMutation()
     } catch (cause) {
       const msg = displayText(cause instanceof Error ? cause.message : t('subscriptions.refreshFailed'))
       setRowError(subscription.id, msg)
@@ -428,13 +461,13 @@ export function useSubscriptions() {
         }
       )
       toastStore.push({
-        message: !subscription.enabled ? '订阅源已启用' : '订阅源已停用',
+        message: !subscription.enabled ? uiText('订阅源已启用', 'Subscription enabled') : uiText('订阅源已停用', 'Subscription disabled'),
         tone: 'success',
       })
-      await load()
+      await reloadAfterMutation()
       return true
     } catch (cause) {
-      const msg = displayText(cause instanceof Error ? cause.message : '切换订阅状态失败')
+      const msg = displayText(cause instanceof Error ? cause.message : uiText('切换订阅状态失败', 'Failed to change subscription status'))
       setRowError(subscription.id, msg)
       toastStore.push({
         message: msg,
@@ -455,6 +488,12 @@ export function useSubscriptions() {
     saving,
     error,
     total,
+    page,
+    pageSize,
+    pageCount,
+    searchText,
+    setPage,
+    search,
     hasItems,
     refreshingIDs,
     togglingIDs,
@@ -470,28 +509,59 @@ export function useSubscriptions() {
   }
 }
 
+export function isFormatErrorEntry(entry: SubscriptionEntryDTO): boolean {
+  return entry.entry_kind === 'format_error' || entry.effective_kind === 'format_error'
+}
+
 export function useSubscriptionEntries() {
   const entries = ref<SubscriptionEntryDTO[]>([])
   const loading = ref(false)
   const error = ref('')
   const total = ref(0)
-  const overridingId = ref<string | null>(null)
+  const entryErrors = ref<Record<string, string>>({})
+  const pendingKeys = ref(new Set<string>())
+  const pendingOperations = new Map<string, symbol>()
+  let activeSubscriptionId = ''
+  let selectionSequence = 0
+  let loadSequence = 0
+
+  function isOverriding(subscriptionId: string, entryId: string) {
+    return pendingKeys.value.has(JSON.stringify([subscriptionId, entryId]))
+  }
+
+  function resetEntries() {
+    ++selectionSequence
+    ++loadSequence
+    activeSubscriptionId = ''
+    entries.value = []
+    total.value = 0
+    error.value = ''
+    entryErrors.value = {}
+    pendingOperations.clear()
+    pendingKeys.value = new Set()
+    loading.value = false
+  }
 
   async function loadEntries(subscriptionId: string) {
+    if (activeSubscriptionId !== subscriptionId) {
+      resetEntries()
+      activeSubscriptionId = subscriptionId
+    }
+    const sequence = ++loadSequence
     loading.value = true
     error.value = ''
     try {
       const res = await api.get<SubscriptionEntriesResponse>(
         `/api/v1/subscriptions/${encodeURIComponent(subscriptionId)}/entries`
       )
+      if (sequence !== loadSequence) return
       entries.value = res?.items ?? []
       total.value = res?.total ?? entries.value.length
     } catch (cause) {
-      error.value = displayText(cause instanceof Error ? cause.message : '加载来源条目失败')
-      entries.value = []
-      total.value = 0
+      if (sequence !== loadSequence) return
+      error.value = displayText(cause instanceof Error ? cause.message : uiText('加载来源条目失败', 'Failed to load source entries'))
     } finally {
-      loading.value = false
+      if (sequence === loadSequence) loading.value = false
     }
   }
 
@@ -501,32 +571,43 @@ export function useSubscriptionEntries() {
     userKindOverride: EntryKind | null,
     reason?: string
   ): Promise<SubscriptionEntryDTO | null> {
-    overridingId.value = entryId
+    const entry = entries.value.find((item) => item.entry_id === entryId)
+    if (activeSubscriptionId !== subscriptionId || !entry || isFormatErrorEntry(entry) || userKindOverride === 'format_error' || isOverriding(subscriptionId, entryId)) return null
+    const key = JSON.stringify([subscriptionId, entryId])
+    const operation = Symbol(key)
+    const selection = selectionSequence
+    pendingOperations.set(key, operation)
+    pendingKeys.value = new Set(pendingKeys.value).add(key)
+    const nextErrors = { ...entryErrors.value }
+    delete nextErrors[entryId]
+    entryErrors.value = nextErrors
     try {
-      const payload: EntryOverridePayload = {
-        user_kind_override: userKindOverride,
-      }
+      const payload: EntryOverridePayload = { user_kind_override: userKindOverride }
       if (reason) payload.reason = reason
       const updated = await api.post<SubscriptionEntryDTO>(
         `/api/v1/subscriptions/${encodeURIComponent(subscriptionId)}/entries/${encodeURIComponent(entryId)}/override`,
         payload
       )
-      if (updated) {
-        const idx = entries.value.findIndex((e) => e.entry_id === entryId)
-        if (idx !== -1) {
-          entries.value[idx] = updated
-        }
+      if (updated && selection === selectionSequence && activeSubscriptionId === subscriptionId) {
+        const idx = entries.value.findIndex((item) => item.entry_id === entryId)
+        if (idx !== -1) entries.value[idx] = updated
       }
-      toastStore.push({ message: '分类覆盖已生效', tone: 'success' })
+      toastStore.push({ message: uiText('分类覆盖已生效', 'Classification override saved'), tone: 'success' })
       return updated
     } catch (cause) {
-      toastStore.push({
-        message: displayText(cause instanceof Error ? cause.message : '更新分类覆盖失败'),
-        tone: 'error',
-      })
+      const message = displayText(cause instanceof Error ? cause.message : uiText('更新分类覆盖失败', 'Failed to update classification override'))
+      if (selection === selectionSequence && activeSubscriptionId === subscriptionId) {
+        entryErrors.value = { ...entryErrors.value, [entryId]: message }
+      }
+      toastStore.push({ message, tone: 'error' })
       throw cause
     } finally {
-      overridingId.value = null
+      if (pendingOperations.get(key) === operation) {
+        pendingOperations.delete(key)
+        const pending = new Set(pendingKeys.value)
+        pending.delete(key)
+        pendingKeys.value = pending
+      }
     }
   }
 
@@ -535,7 +616,9 @@ export function useSubscriptionEntries() {
     loading,
     error,
     total,
-    overridingId,
+    entryErrors,
+    isOverriding,
+    resetEntries,
     loadEntries,
     setOverride,
   }

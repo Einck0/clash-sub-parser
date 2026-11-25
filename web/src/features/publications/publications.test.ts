@@ -128,6 +128,7 @@ describe('usePublications composable', () => {
     localStorage.clear()
     sessionStorage.clear()
     vi.restoreAllMocks()
+    vi.spyOn(api, 'get').mockResolvedValue({ export_mode: 'open' })
   })
 
   it('clears only the revoked target capability, preserving other target and unrelated session data', async () => {
@@ -335,6 +336,7 @@ describe('PublicationsView component rendering', () => {
     localStorage.clear()
     sessionStorage.clear()
     vi.restoreAllMocks()
+    vi.spyOn(api, 'get').mockResolvedValue({ export_mode: 'open' })
 
     if (!HTMLDialogElement.prototype.showModal) {
       HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
@@ -449,6 +451,7 @@ describe('PublicationsView component rendering', () => {
     document.body.appendChild(mountEl)
     const testApp = createApp({ render: () => h(PublicationsView) })
     testApp.mount(mountEl)
+    await Promise.resolve()
     await nextTick()
 
     const mihomoInput = mountEl.querySelector('[data-testid="direct-url-input-mihomo"]') as HTMLInputElement
@@ -501,6 +504,7 @@ describe('PublicationsView component rendering', () => {
     document.body.appendChild(mountEl)
     const app = createApp({ render: () => h(PublicationsView) })
     app.mount(mountEl)
+    await Promise.resolve()
     await nextTick()
 
     const singboxCopyBtn = mountEl.querySelector('[data-testid-target="copy-client-subscription-singbox"]') as HTMLButtonElement

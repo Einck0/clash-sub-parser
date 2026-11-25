@@ -1,6 +1,6 @@
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import yaml from 'js-yaml'
-import { ApiError, api } from '../../api/client'
+import { api } from '../../api/client'
 import { uiText } from '../../locales/redesign'
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges'
 import type { DnsSettings, ValidatedDns } from './dnsTypes'
@@ -31,18 +31,21 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
   return typeof val === 'object' && val !== null && !Array.isArray(val)
 }
 
-function cloneValue<T>(val: T): T {
-  if (val === null || typeof val !== 'object') {
-    return val
+function cloneValue<T>(val: T, ancestors = new WeakSet<object>()): T {
+  if (val === null || typeof val !== 'object') return val
+  if (ancestors.has(val)) {
+    throw new Error(uiText('DNS YAML 不支持递归引用', 'DNS YAML does not support recursive references'))
   }
-  if (Array.isArray(val)) {
-    return val.map(cloneValue) as unknown as T
+  ancestors.add(val)
+  try {
+    if (Array.isArray(val)) return val.map((item) => cloneValue(item, ancestors)) as unknown as T
+    // Define own properties so extension keys such as __proto__ remain ordinary data.
+    return Object.fromEntries(
+      Object.entries(val).map(([key, value]) => [key, cloneValue(value, ancestors)] as const)
+    ) as unknown as T
+  } finally {
+    ancestors.delete(val)
   }
-  const result: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
-    result[k] = cloneValue(v)
-  }
-  return result as T
 }
 
 export function serializeDraftToYaml(draftObj: Record<string, unknown>, enabledVal: boolean): string {
@@ -59,6 +62,8 @@ export interface UseDnsDraftReturn {
   mode: Ref<'visual' | 'raw'>
   loading: Ref<boolean>
   saving: Ref<boolean>
+  saveNeedsConfirmation: ComputedRef<boolean>
+  saveConflict: Ref<boolean>
   validating: Ref<boolean>
   previewing: Ref<boolean>
   busy: ComputedRef<boolean>
@@ -105,11 +110,15 @@ export function useDnsDraft(): UseDnsDraftReturn {
   const settings = ref<DnsSettings | null>(null)
   const enabled = ref(false)
   const raw = ref('')
+  const rawBaseline = ref('')
   const draft = ref<Record<string, unknown>>({})
   const mode = ref<'visual' | 'raw'>('visual')
 
   const loading = ref(false)
   const saving = ref(false)
+  const pendingSave = ref<{ settings: DnsSettings; draftRevision: number } | null>(null)
+  const saveNeedsConfirmation = computed(() => pendingSave.value !== null)
+  const saveConflict = ref(false)
   const validating = ref(false)
   const previewing = ref(false)
   const busy = computed(() => loading.value || saving.value || validating.value || previewing.value)
@@ -152,11 +161,12 @@ export function useDnsDraft(): UseDnsDraftReturn {
 
   const dirty = computed(() => {
     if (!settings.value) return false
+    if (saveNeedsConfirmation.value || saveConflict.value) return true
     if (enabled.value !== settings.value.enabled) return true
     if (mode.value === 'visual') {
       return visualDirty.value
     }
-    return raw.value !== settings.value.raw_yaml
+    return raw.value !== rawBaseline.value
   })
 
   // Hook unsaved changes to browser beforeunload and router leave guards
@@ -190,7 +200,10 @@ export function useDnsDraft(): UseDnsDraftReturn {
       settings.value = settingsValue
       enabled.value = settingsValue.enabled
       raw.value = settingsValue.raw_yaml || serializeDraftToYaml(settingsValue.config || {}, settingsValue.enabled)
+      rawBaseline.value = raw.value
       draft.value = cloneValue(settingsValue.config || {})
+      pendingSave.value = null
+      saveConflict.value = false
       fieldErrors.value = {}
       invalidMappingInputs.value = {}
       error.value = ''
@@ -320,7 +333,8 @@ export function useDnsDraft(): UseDnsDraftReturn {
     }
 
     try {
-      const parsed = yaml.load(rawVal)
+      // Keep date-like scalars as text, as they arrive through the JSON API.
+      const parsed = yaml.load(rawVal, { schema: yaml.JSON_SCHEMA })
       if (!isPlainObject(parsed)) {
         invalidMappingInputs.value[key] = rawVal
         const errMsg = uiText(
@@ -332,7 +346,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
         return false
       }
 
-      draft.value = { ...draft.value, [key]: parsed }
+      draft.value = { ...draft.value, [key]: cloneValue(parsed) }
       delete invalidMappingInputs.value[key]
       delete fieldErrors.value[key]
       cleanupFieldError(key)
@@ -411,16 +425,19 @@ export function useDnsDraft(): UseDnsDraftReturn {
   }
 
   async function load(force = false) {
+    if (busy.value) return
     if (dirty.value && !force && !confirmDiscard()) return
     loading.value = true
     error.value = ''
     notice.value = ''
     const currentGen = ++generation.value
+    const currentDraftRev = draftRevision.value
     try {
       const fetched = await api.get<DnsSettings>('/api/v1/settings/dns')
-      if (currentGen !== generation.value) return
+      if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) return
       apply(fetched)
     } catch (e: any) {
+      if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) return
       error.value = displayText(e instanceof Error ? e.message : uiText('读取 DNS 设置失败', 'Failed to read DNS settings'))
     } finally {
       loading.value = false
@@ -440,7 +457,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
   }
 
   async function preview(): Promise<void> {
-    if (busy.value) return
+    if (!settings.value || busy.value) return
     if (mode.value === 'visual' && hasValidationErrors.value) {
       error.value = uiText('请先修正字段格式错误后再生成预览', 'Please correct field format errors before previewing')
       return
@@ -478,7 +495,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
 
   async function switchMode(next: 'visual' | 'raw') {
     if (next === mode.value) return
-    if (busy.value) return
+    if (!settings.value || busy.value) return
     if (mode.value === 'visual' && hasValidationErrors.value) {
       error.value = uiText('请先修正字段格式错误后再切换模式', 'Please correct field format errors before switching modes')
       return
@@ -488,6 +505,7 @@ export function useDnsDraft(): UseDnsDraftReturn {
     const currentGen = ++generation.value
     const currentDraftRev = draftRevision.value
     const capturedEnabled = enabled.value
+    const wasDirty = dirty.value
 
     try {
       if (next === 'visual') {
@@ -512,15 +530,17 @@ export function useDnsDraft(): UseDnsDraftReturn {
         invalidMappingInputs.value = {}
         draftRevision.value++
       }
+      if (!wasDirty) rawBaseline.value = raw.value
       mode.value = next
     } catch (e: any) {
+      if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) return
       error.value = displayText(e instanceof Error ? e.message : uiText('DNS 配置校验失败', 'DNS configuration validation failed'))
     }
   }
 
   async function save() {
-    if (!settings.value || busy.value) return
-    if (mode.value === 'visual' && hasValidationErrors.value) {
+    if (!settings.value || busy.value || saveConflict.value) return
+    if (!pendingSave.value && mode.value === 'visual' && hasValidationErrors.value) {
       error.value = uiText('请先修正字段格式错误后再保存', 'Please correct field format errors before saving')
       return
     }
@@ -534,49 +554,70 @@ export function useDnsDraft(): UseDnsDraftReturn {
     const capturedRevision = settings.value.revision
 
     try {
-      const rawInput = mode.value === 'raw' ? raw.value : serializeDraftToYaml(draft.value, capturedEnabled)
-      const validated = await validate(rawInput, capturedEnabled)
-      if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) {
-        return
+      if (!pendingSave.value) {
+        const rawInput = mode.value === 'raw' ? raw.value : serializeDraftToYaml(draft.value, capturedEnabled)
+        const validated = await validate(rawInput, capturedEnabled)
+        if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) return
+
+        const written = await api.put<DnsSettings>('/api/v1/settings/dns', {
+          enabled: capturedEnabled,
+          raw_yaml: validated.raw_yaml,
+          expected_revision: capturedRevision,
+        })
+        if (currentGen !== generation.value) return
+
+        // A successful PUT owns a real new revision, even if the confirmation GET fails.
+        settings.value = written
+        pendingSave.value = { settings: written, draftRevision: currentDraftRev }
       }
 
-      await api.put<DnsSettings>('/api/v1/settings/dns', {
-        enabled: capturedEnabled,
-        raw_yaml: validated.raw_yaml,
-        expected_revision: capturedRevision,
-      })
-      if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) {
-        return
-      }
-
+      const pending = pendingSave.value!
       const confirmed = await api.get<DnsSettings>('/api/v1/settings/dns')
-      if (currentGen !== generation.value || currentDraftRev !== draftRevision.value) {
+      if (currentGen !== generation.value) return
+
+      if (
+        confirmed.revision !== pending.settings.revision ||
+        confirmed.enabled !== pending.settings.enabled ||
+        confirmed.raw_yaml !== pending.settings.raw_yaml ||
+        !deepEqual(confirmed.config, pending.settings.config)
+      ) {
+        pendingSave.value = null
+        saveConflict.value = true
+        error.value = uiText(
+          `DNS 已写入 revision ${pending.settings.revision}，但服务器回读为 revision ${confirmed.revision}，内容或版本已变化。草稿已保留，请复制草稿后重载核对。`,
+          `DNS was written at revision ${pending.settings.revision}, but the server returned revision ${confirmed.revision} with changed content or version. Draft preserved; copy it before reloading to compare.`
+        )
         return
       }
 
-      apply(confirmed)
-      notice.value = uiText('DNS 设置已保存并从服务器重新读取。', 'DNS settings saved and reloaded from server.')
+      if (draftRevision.value === pending.draftRevision) {
+        apply(confirmed)
+        notice.value = uiText('DNS 设置已保存并从服务器重新读取。', 'DNS settings saved and reloaded from server.')
+      } else {
+        // Confirmation must not replace edits made after the accepted write.
+        settings.value = confirmed
+        rawBaseline.value = confirmed.raw_yaml
+        pendingSave.value = null
+        notice.value = dirty.value
+          ? uiText('上次保存已从服务器确认；之后的草稿修改仍未保存。', 'The previous save is confirmed; newer draft edits are still unsaved.')
+          : uiText('DNS 设置已保存并从服务器重新读取。', 'DNS settings saved and reloaded from server.')
+      }
     } catch (e: any) {
-      if (
-        e?.status === 409 ||
-        (e instanceof ApiError && e.status === 409) ||
-        (e?.name === 'ApiError' && e?.status === 409)
-      ) {
+      if (currentGen !== generation.value) return
+      if (pendingSave.value) {
+        const reason = displayText(e instanceof Error ? e.message : uiText('读取失败', 'Read failed'))
         error.value = uiText(
-          'DNS 设置已被其他操作更新（revision 冲突）；草稿已保留，请重新加载或复制草稿后再处理。',
-          'DNS settings updated by another operation (revision conflict); draft preserved, please reload or copy your draft.'
+          `服务器已接受 DNS 保存（revision ${pendingSave.value.settings.revision}），但回读失败。草稿已保留；点击“确认保存结果”只会重新读取，不会重复提交。${reason}`,
+          `The server accepted the DNS save (revision ${pendingSave.value.settings.revision}), but read-back failed. Draft preserved; Confirm save only retries the read, not the write. ${reason}`
         )
-      } else if (
-        e?.status === 422 ||
-        (e instanceof ApiError && e.status === 422) ||
-        (e?.name === 'ApiError' && e?.status === 422)
-      ) {
-        error.value = displayText(
-          e?.message ||
-          uiText('DNS 配置校验失败（422 参数错误），草稿已保留。', 'DNS configuration validation failed (422 error); draft preserved.')
+      } else if (e?.status === 409) {
+        saveConflict.value = true
+        error.value = uiText(
+          'DNS 设置已被其他操作更新（revision 冲突）；草稿已保留，原 revision 未变，不会自动覆盖新版本。请复制草稿后重新加载核对。',
+          'DNS settings updated by another operation (revision conflict); draft and original revision preserved. The newer version will not be overwritten automatically. Copy your draft before reloading to compare.'
         )
       } else {
-        error.value = displayText(e instanceof Error ? e.message : uiText('保存 DNS 设置失败', 'Failed to save DNS settings'))
+        error.value = displayText(e instanceof Error ? e.message : uiText('保存 DNS 设置失败；草稿已保留', 'Failed to save DNS settings; draft preserved'))
       }
     } finally {
       saving.value = false
@@ -591,6 +632,8 @@ export function useDnsDraft(): UseDnsDraftReturn {
     mode,
     loading,
     saving,
+    saveNeedsConfirmation,
+    saveConflict,
     validating,
     previewing,
     busy,

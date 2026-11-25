@@ -11,6 +11,7 @@ import {
   formatFullDateTime,
   useSubscriptions,
   extractSecondLevelDomainName,
+  type SubscriptionDraft,
   type SubscriptionRecord,
 } from './useSubscriptions'
 
@@ -518,7 +519,7 @@ describe('SubscriptionConfigDrawer validation guards', () => {
     const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
     const mountEl = document.createElement('div')
     document.body.appendChild(mountEl)
-    const saved = vi.fn()
+    const saved = vi.fn((_draft: SubscriptionDraft, settled: (error?: string) => void) => settled())
     const source: SubscriptionRecord = {
       id: 'prefix-source', name: 'Prefix source', source_url_secret_ref: 'https://example.com/feed',
       enabled: false, prefix: 'A ', refresh_policy: { interval_seconds: 3600, timeout_seconds: 30, user_agent_policy: 'default', max_response_bytes: 1024 },
@@ -537,7 +538,7 @@ describe('SubscriptionConfigDrawer validation guards', () => {
         input.dispatchEvent(new Event('input'))
         document.querySelector<HTMLButtonElement>('[data-testid="subscription-drawer-save-btn"]')!.click()
         await nextTick()
-        const payload = saved.mock.calls.at(-1)?.[0]
+        const payload = saved.mock.calls.at(-1)![0]
         expect(payload.prefix).toBe(prefix)
         expect(payload.config).not.toHaveProperty('prefix')
       }
@@ -547,13 +548,13 @@ describe('SubscriptionConfigDrawer validation guards', () => {
     }
     // Clearing persists as an empty top-level field, never a fallback to old config.
     const { subscriptionPatchPayload } = await import('./useSubscriptions')
-    expect(subscriptionPatchPayload(saved.mock.calls.at(-1)?.[0]).prefix).toBe('')
+    expect(subscriptionPatchPayload(saved.mock.calls.at(-1)![0]).prefix).toBe('')
   })
   it('blocks save and forces basic tab when saving with blank name or source URL', async () => {
     const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
     const { createApp, h, nextTick } = await import('vue')
 
-    const saveSpy = vi.fn()
+    const saveSpy = vi.fn((_draft: SubscriptionDraft, settled: (error?: string) => void) => settled())
     const mountEl = document.createElement('div')
     document.body.appendChild(mountEl)
 
@@ -611,7 +612,8 @@ describe('SubscriptionConfigDrawer validation guards', () => {
       expect.objectContaining({
         name: 'Valid HK Sub',
         source_url_secret_ref: 'https://example.com/sub.yaml',
-      })
+      }),
+      expect.any(Function)
     )
 
     app.unmount()
@@ -788,7 +790,7 @@ describe('Unsaved Changes Guard & Progressive Disclosure Fidelity', () => {
     const { default: SubscriptionConfigDrawer } = await import('./SubscriptionConfigDrawer.vue')
     const mountEl = document.createElement('div')
     document.body.appendChild(mountEl)
-    const saved = vi.fn()
+    const saved = vi.fn((_draft: SubscriptionDraft, settled: (error?: string) => void) => settled())
 
     const app = createApp({
       render: () => h(SubscriptionConfigDrawer, { modelValue: true, onSave: saved }),

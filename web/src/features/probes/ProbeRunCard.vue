@@ -8,7 +8,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import { probeStateLabel, type ProbeRun } from './probeTypes'
 import StatusBadge from '../../ui/StatusBadge.vue'
-import { t } from '../../locales'
+import { uiText } from '../../locales'
 
 const props = defineProps<{
   run: ProbeRun
@@ -40,8 +40,8 @@ const durationLabel = computed(() => {
     const end = new Date(props.run.updated_at || props.run.created_at).getTime()
     if (Number.isNaN(start) || Number.isNaN(end) || end < start) return ''
     const sec = Math.max(1, Math.round((end - start) / 1000))
-    if (!isTerminal.value) return '正在执行测速'
-    return `耗时 ${sec}s`
+    if (!isTerminal.value) return uiText('正在执行检测', 'Probe in progress')
+    return uiText(`耗时 ${sec}s`, `Duration ${sec}s`)
   } catch {
     return ''
   }
@@ -71,11 +71,11 @@ const durationLabel = computed(() => {
               <BoltIcon class="w-4 h-4" :class="{ 'animate-pulse': run.state === 'running' }" />
             </div>
             <h3 class="text-xs sm:text-sm font-semibold truncate">
-              手动测速任务 · {{ formattedCreatedAt }}
+              {{ uiText('检测任务', 'Probe run') }} · {{ formattedCreatedAt }}
             </h3>
           </div>
           <p class="mt-1 text-xs opacity-65 truncate">
-            主动探测队列 · {{ durationLabel || probeStateLabel(run.state) }}
+            {{ uiText('主动检测队列', 'Probe queue') }} · {{ durationLabel || probeStateLabel(run.state) }}
           </p>
         </div>
         <StatusBadge
@@ -97,10 +97,10 @@ const durationLabel = computed(() => {
             data-testid="cancel-run-btn"
             class="btn btn-xs btn-ghost text-error gap-1"
             :disabled="cancelling"
-            @click="emit('cancel', run.id)"
+            @click="!cancelling && emit('cancel', run.id)"
           >
             <XCircleIcon class="w-3.5 h-3.5" />
-            {{ t('probes.cancelRun') }}
+            {{ uiText('取消检测', 'Cancel probe') }}
           </button>
           <button
             type="button"
@@ -108,7 +108,7 @@ const durationLabel = computed(() => {
             class="btn btn-xs btn-primary btn-outline gap-1"
             @click="emit('inspect', run)"
           >
-            <span>{{ t('probes.viewEvidence') }}</span>
+            <span>{{ uiText('查看证据', 'View evidence') }}</span>
             <ChevronRightIcon class="w-3 h-3" />
           </button>
         </div>

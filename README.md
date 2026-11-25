@@ -216,32 +216,14 @@ The unified settings domain is organized into three interconnected workbenches a
 
 ---
 
-## Agent Operations & Automated Skills (skills/csp-ops)
+## Management API & Automation
 
-To enable external autonomous agents (e.g. Hermes Agent, Pi multi-agent clusters) and automation scripts to interact with, manage, and configure CSP 1.0 **without modifying source code or rebuilding containers**, CSP provides a dedicated agent skill package in [`skills/csp-ops/`](skills/csp-ops/SKILL.md).
+Automation should use the current `/api/v1/*` management API and preserve authentication, CSRF, row revisions and configuration-version conflict checks. See the [API semantic matrix](docs/api_semantic_matrix.md), [Operations](docs/operations.md) and [cloud delivery guide](docs/operations/csp-cloud-delivery.md). The legacy development-only `csp_ctl.py` skill copy is not part of the current distribution or an installation prerequisite.
 
-### Built-in Agent CLI (`csp_ctl.py`)
-Located at `skills/csp-ops/scripts/csp_ctl.py`, written in pure Python 3 standard library (zero external dependencies), ready for any container or host environment:
+### Workflow and Evidence Feedback
 
-```bash
-# 1. Cluster Status & Diagnostics
-python3 skills/csp-ops/scripts/csp_ctl.py status
-
-# 2. Routing Rules Management (fuzzy category & group resolution)
-python3 skills/csp-ops/scripts/csp_ctl.py rule list --limit 100
-python3 skills/csp-ops/scripts/csp_ctl.py rule list --search "openai"
-python3 skills/csp-ops/scripts/csp_ctl.py rule add --expression "DOMAIN-SUFFIX,anthropic.com" --target "AI" --category "AI"
-python3 skills/csp-ops/scripts/csp_ctl.py rule delete --id "<rule-uuid>"
-
-# 3. Policy Group Pipeline & Empty Node Fallback Controls
-python3 skills/csp-ops/scripts/csp_ctl.py group list
-python3 skills/csp-ops/scripts/csp_ctl.py group get "选择节点"
-python3 skills/csp-ops/scripts/csp_ctl.py group add-source "选择节点" --kind filter --filter-display-not-regex "自动|故障|官网|套餐|机场|订阅"
-python3 skills/csp-ops/scripts/csp_ctl.py group set-empty-pass "加拿大" --enable
-
-# 4. Subscriptions Management & Synchronous Refresh
-python3 skills/csp-ops/scripts/csp_ctl.py sub list
-python3 skills/csp-ops/scripts/csp_ctl.py sub refresh --all
-```
-
-For complete SDK usage, optimistic concurrency locking details, and REST API contracts, see [skills/csp-ops/SKILL.md](skills/csp-ops/SKILL.md).
+- **Drafts and saves**: Subscription, connection, policy, rule, DNS, chain and server-setting editors distinguish unsaved, saving, confirmed and read-failed states. Conflicts do not silently overwrite drafts. If a write was confirmed but read-back failed, retry the read rather than creating the object again.
+- **Probe evidence**: Ordinary probes, explicit single-node bandwidth tests and historical runs remain separate. Queued, running, failed and cancelled states do not mean a speed test completed. Evidence-store read failures are retryable errors, not normal unknown results; genuinely absent observations remain unknown.
+- **Saved-speed filtering**: The minimum KiB/s filter only uses valid saved throughput for the current connection. Blank is unrestricted; zero still requires a positive valid measurement. Browsing or filtering never starts a bandwidth test.
+- **Client exports**: Live links use the latest saved inventory and configuration. Preview downloads and frozen publications bind to one snapshot. Exclusions are searchable by safe display name or reason, falling back to a validated, length-bounded node ID for legacy or unsafe names, or an unavailable-name label when the ID is also unsuitable for display. Public export headers do not include management display names.
+- **Settings and navigation**: Five settings sections are directly addressable. Server settings remain separate from browser-local theme/language preferences. DNS Raw/Visual editing preserves unrecognized keys; chain editors distinguish unconfirmed options, cached options and genuinely missing references.

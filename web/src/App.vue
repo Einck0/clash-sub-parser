@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted, type Component } from 'vue'
 import { useRoute, useRouter, RouterView, RouterLink } from 'vue-router'
 import {
   Squares2X2Icon,
@@ -17,7 +17,6 @@ import {
   ChevronDoubleLeftIcon,
   ChevronDoubleRightIcon,
   EllipsisHorizontalIcon,
-  XMarkIcon,
 } from '@heroicons/vue/24/outline'
 import { api, ApiError } from './api/client'
 import { applyTheme, getStoredTheme, THEME_NAMES, type ThemeName } from './theme'
@@ -25,7 +24,8 @@ import ToastContainer from './ui/ToastContainer.vue'
 import { useAuth } from './features/auth/useAuth'
 import AuthGate from './features/auth/AuthGate.vue'
 import { useContentInset } from './composables/useContentInset'
-import { useBodyScrollLock } from './composables/useBodyScrollLock'
+import Drawer from './ui/Drawer.vue'
+import { drawerStack } from './ui/drawerStack'
 import {
   getRouteTab,
   isMobileMoreTab,
@@ -71,7 +71,7 @@ interface NavItemDef {
   defaultLabel: string
   labelZh?: string
   labelEn?: string
-  icon: any
+  icon: Component
 }
 
 function navItemLabel(item: NavItemDef): string {
@@ -152,6 +152,7 @@ const isMoreActive = computed<boolean>(() => {
 const isMoreOpen = ref<boolean>(false)
 
 function toggleMore() {
+  closeThemeDropdown()
   isMoreOpen.value = !isMoreOpen.value
 }
 
@@ -212,30 +213,49 @@ const viewKey = ref(0)
 const isThemeOpen = ref(false)
 const themeDropdownRef = ref<HTMLElement | null>(null)
 
-const isMobileOverlayActive = computed(() => {
-  if (typeof window === 'undefined') return false
-  return (isThemeOpen.value || isMoreOpen.value) && window.innerWidth < 768
-})
-useBodyScrollLock(isMobileOverlayActive)
 const themeToggleBtnRef = ref<HTMLButtonElement | null>(null)
 
-const toggleThemeDropdown = () => {
+const toggleThemeDropdown = async () => {
   if (isThemeOpen.value) {
     closeThemeDropdown()
   } else {
+    closeMore()
     isThemeOpen.value = true
+    await nextTick()
+    themeDropdownRef.value?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus()
   }
 }
 
-const closeThemeDropdown = () => {
+const closeThemeDropdown = (restoreFocus = true) => {
+  const ownedFocus = themeDropdownRef.value?.contains(document.activeElement)
   isThemeOpen.value = false
-  if (typeof document !== 'undefined') {
-    const active = document.activeElement
-    if (active instanceof HTMLElement && themeDropdownRef.value?.contains(active)) {
-      active.blur()
-    }
-  }
+  if (restoreFocus && ownedFocus) themeToggleBtnRef.value?.focus()
 }
+
+function handleThemeKeydown(event: KeyboardEvent) {
+  if (!isThemeOpen.value) return
+  const options = Array.from(themeDropdownRef.value?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') || [])
+  const current = options.indexOf(document.activeElement as HTMLButtonElement)
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault()
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+      : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length
+    options[index]?.focus()
+  } else if (event.key === 'Tab') closeThemeDropdown(false)
+}
+
+function focusMain() {
+  document.getElementById('main-content')?.focus()
+}
+
+function handleViewportResize() {
+  if (window.innerWidth >= 768) closeMore()
+}
+
+watch(() => injectedRoute?.fullPath, () => {
+  closeMore()
+  closeThemeDropdown(false)
+})
 
 const switchTheme = (theme: ThemeName) => {
   currentTheme.value = theme
@@ -247,29 +267,30 @@ const handleDocumentClick = (e: MouseEvent) => {
   const target = e.target as Node | null
   if (isThemeOpen.value) {
     if (themeDropdownRef.value && target && !themeDropdownRef.value.contains(target)) {
-      closeThemeDropdown()
+      closeThemeDropdown(false)
     }
   }
 }
 
 const handleGlobalKeydown = (e: KeyboardEvent) => {
-  if (e.key === 'Escape') {
-    if (isThemeOpen.value) {
-      closeThemeDropdown()
-    }
-    if (isMoreOpen.value) {
-      closeMore()
-    }
+  if (e.key === 'Escape' && isThemeOpen.value && !e.defaultPrevented) {
+    e.preventDefault()
+    closeThemeDropdown()
   }
 }
 
+let healthRequest = 0
 const checkHealth = async () => {
+  const request = ++healthRequest
   healthStatus.value = 'checking'
+  requestId.value = ''
   try {
     const res = await api.get<{ status: string }>('/healthz')
+    if (request !== healthRequest) return
     healthStatus.value = 'healthy'
-    healthDetails.value = `Service Status: ${res.status}`
+    healthDetails.value = displayText(res.status)
   } catch (err) {
+    if (request !== healthRequest) return
     healthStatus.value = 'unhealthy'
     if (err instanceof ApiError) {
       healthDetails.value = displayText(`${err.code}: ${err.message}`)
@@ -280,8 +301,11 @@ const checkHealth = async () => {
   }
 }
 
-function handleNavigation(tabId: NavTab, path: string) {
+function handleNavigation(tabId: NavTab, path: string, event?: MouseEvent) {
+  if (event && (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return
+  event?.preventDefault()
   closeMore()
+  if (router.currentRoute.value.name === tabId) return
   return router.push(path).catch(() => {})
 }
 
@@ -306,6 +330,7 @@ const handleAuthSuccess = () => {
 
 onMounted(() => {
   if (typeof window !== 'undefined') {
+    window.addEventListener('resize', handleViewportResize)
     window.addEventListener('click', handleDocumentClick)
     window.addEventListener('keydown', handleGlobalKeydown)
     window.addEventListener('hashchange', handleHashChange)
@@ -319,7 +344,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  healthRequest++
   if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', handleViewportResize)
     window.removeEventListener('click', handleDocumentClick)
     window.removeEventListener('keydown', handleGlobalKeydown)
     window.removeEventListener('hashchange', handleHashChange)
@@ -329,10 +356,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-base-100 flex flex-col md:flex-row text-base-content">
+  <div class="csp-app min-h-screen bg-base-100 flex flex-col md:flex-row text-base-content">
+    <a href="#main-content" class="csp-skip-link" @click.prevent="focusMain">{{ uiText('跳到主要内容', 'Skip to main content') }}</a>
     <!-- Desktop Collapsible Grouped Sidebar -->
     <aside
-      class="hidden md:flex flex-col bg-base-200 border-r border-base-300 select-none shrink-0 sticky top-0 h-screen overflow-y-auto transition-[width] duration-200 ease-in-out z-20"
+      :inert="drawerStack.length > 0"
+      class="csp-sidebar hidden md:flex flex-col bg-base-200 border-r border-base-300 select-none shrink-0 sticky top-0 h-dvh overflow-y-auto transition-[width] duration-200 ease-in-out z-20"
       :class="isCollapsed ? 'w-20' : 'w-64'"
     >
       <!-- Sidebar Header / Logo -->
@@ -342,7 +371,7 @@ onUnmounted(() => {
             C
           </div>
           <div v-if="!isCollapsed" class="min-w-0 transition-opacity duration-150">
-            <h1 class="font-bold text-sm tracking-wide truncate">{{ t('topbar.sidebarTitle') }}</h1>
+            <p class="font-bold text-sm tracking-wide truncate">{{ t('topbar.sidebarTitle') }}</p>
             <p class="text-xs text-base-content/60 truncate">{{ t('topbar.sidebarVersion') }}</p>
           </div>
         </div>
@@ -352,7 +381,8 @@ onUnmounted(() => {
           @click="toggleCollapse"
           class="btn btn-ghost btn-xs btn-circle text-base-content/60 hover:text-base-content shrink-0"
           :title="isCollapsed ? t('nav.expand') : t('nav.collapse')"
-          aria-label="Toggle Sidebar"
+          :aria-label="isCollapsed ? t('nav.expand') : t('nav.collapse')"
+          :aria-expanded="!isCollapsed"
           data-testid="sidebar-collapse-toggle"
         >
           <ChevronDoubleLeftIcon v-if="!isCollapsed" class="w-4 h-4" />
@@ -361,7 +391,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Sidebar Grouped Navigation Links -->
-      <nav class="flex-1 p-3 space-y-4 overflow-y-auto" aria-label="Desktop Navigation">
+      <nav class="flex-1 p-3 space-y-4 overflow-y-auto" :aria-label="uiText('主导航', 'Main navigation')">
         <div v-for="group in navGroups" :key="group.id" class="space-y-1">
           <div
             v-if="!isCollapsed"
@@ -378,12 +408,12 @@ onUnmounted(() => {
             custom
             v-slot="{ href, isActive }"
           >
-            <button
+            <a
               :href="href"
-              type="button"
+              :aria-label="navItemLabel(item)"
               :aria-current="(isActive || isItemActive(item)) ? 'page' : undefined"
-              @click="handleNavigation(item.id, item.path)"
-              class="w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+              @click="handleNavigation(item.id, item.path, $event)"
+              class="csp-nav-link w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-colors cursor-pointer"
               :class="[
                 isActive || isItemActive(item)
                   ? 'bg-primary text-primary-content shadow-sm'
@@ -394,7 +424,7 @@ onUnmounted(() => {
             >
               <component :is="item.icon" class="w-5 h-5 shrink-0" />
               <span v-if="!isCollapsed" class="truncate">{{ navItemLabel(item) }}</span>
-            </button>
+            </a>
           </RouterLink>
         </div>
       </nav>
@@ -410,6 +440,8 @@ onUnmounted(() => {
               @click="switchTheme(tName)"
               class="btn btn-xs btn-ghost"
               :class="{ 'btn-active': currentTheme === tName }"
+              :aria-label="themeLabel(tName)"
+              :aria-pressed="currentTheme === tName"
             >
               {{ tName[0].toUpperCase() }}
             </button>
@@ -419,7 +451,8 @@ onUnmounted(() => {
           <button
             @click="switchTheme(currentTheme === 'dark' ? 'light' : 'dark')"
             class="btn btn-ghost btn-xs btn-circle"
-            :title="`${t('themes.label')}：{{ themeLabel(currentTheme) }}`"
+            :title="`${t('themes.label')}：${themeLabel(currentTheme)}`"
+            :aria-label="uiText('切换明暗主题', 'Switch light and dark theme')"
           >
             <SunIcon v-if="currentTheme === 'light'" class="w-4 h-4" />
             <MoonIcon v-else class="w-4 h-4" />
@@ -431,12 +464,12 @@ onUnmounted(() => {
     <!-- Main Content Container -->
     <div class="flex-1 flex flex-col min-w-0 overflow-x-hidden">
       <!-- Topbar Header -->
-      <header class="h-16 bg-base-100 border-b border-base-300 flex items-center justify-between px-3 sm:px-6 sticky top-0 z-20 backdrop-blur bg-base-100/80 w-full overflow-visible">
+      <header :inert="drawerStack.length > 0" class="csp-topbar h-16 bg-base-100 border-b border-base-300 flex items-center justify-between px-3 sm:px-6 sticky top-0 z-20 backdrop-blur bg-base-100/80 w-full overflow-visible">
         <div class="flex items-center gap-2 sm:gap-3 min-w-0 shrink">
           <RouterLink
             to="/dashboard"
             class="md:hidden w-8 h-8 rounded-lg bg-primary text-primary-content flex items-center justify-center font-bold text-base shadow-sm shrink-0"
-            aria-label="Dashboard"
+            :aria-label="t('nav.dashboard')"
           >
             C
           </RouterLink>
@@ -447,10 +480,10 @@ onUnmounted(() => {
         <div class="flex items-center gap-1.5 sm:gap-3 shrink-0">
           <!-- Auth Badge -->
           <RouterLink to="/settings" custom v-slot="{ href }">
-            <button
+            <a
               :href="href"
-              type="button"
               data-testid="header-auth-badge"
+              :aria-label="uiText('查看访问保护设置', 'View access protection settings')"
               class="flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2.5 py-1 rounded-full text-xs font-medium border border-base-300 transition-colors cursor-pointer header-auth-badge shrink-0 touch-manipulation select-none"
               :class="{
                 'bg-warning/10 text-warning border-warning/30 hover:bg-warning/20': authState === 'open',
@@ -460,7 +493,7 @@ onUnmounted(() => {
                 'bg-error/10 text-error border-error/30': authState === 'error',
               }"
               :title="authState === 'open' ? t('topbar.openModeTooltip') : authState === 'authenticated' ? t('topbar.protectedAuthTooltip') : authState === 'unauthenticated' ? t('topbar.protectedUnauthTooltip') : t('topbar.probingTooltip')"
-              @click="handleNavigation('settings', '/settings')"
+              @click="handleNavigation('settings', '/settings', $event)"
             >
               <span
                 class="w-2 h-2 rounded-full inline-block shrink-0"
@@ -472,11 +505,11 @@ onUnmounted(() => {
                 }"
               />
               <span class="hidden sm:inline whitespace-nowrap">{{ authState === 'open' ? t('topbar.openMode') : (authState === 'authenticated' || authState === 'unauthenticated') ? t('topbar.protected') : authState === 'probing' ? t('topbar.probing') : t('topbar.authError') }}</span>
-            </button>
+            </a>
           </RouterLink>
 
           <!-- Live Health Indicator -->
-          <div class="flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2.5 py-1 rounded-full text-xs font-medium border border-base-300 bg-base-200/50 header-health-indicator shrink-0 select-none">
+          <div :title="healthStatus === 'unhealthy' ? healthDetails : uiText('服务响应状态，不代表节点或配置已验证', 'Service response, not node or configuration validation')" class="flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2.5 py-1 rounded-full text-xs font-medium border border-base-300 bg-base-200/50 header-health-indicator shrink-0 select-none">
             <span
               class="w-2 h-2 rounded-full shrink-0"
               :class="{
@@ -485,8 +518,8 @@ onUnmounted(() => {
                 'bg-error': healthStatus === 'unhealthy'
               }"
             />
-            <span class="hidden sm:inline capitalize whitespace-nowrap">{{ healthStatus === 'healthy' ? t('topbar.systemReady') : healthStatus === 'unhealthy' ? t('topbar.connectionError') : t('topbar.checking') }}</span>
-            <button @click="checkHealth" class="btn btn-ghost btn-xs btn-circle ml-0.5 touch-manipulation" :title="t('topbar.refreshHealth')" :aria-label="t('topbar.refreshHealth')">
+            <span class="hidden sm:inline capitalize whitespace-nowrap">{{ healthStatus === 'healthy' ? uiText('服务在线', 'Service online') : healthStatus === 'unhealthy' ? t('topbar.connectionError') : t('topbar.checking') }}</span>
+            <button type="button" :disabled="healthStatus === 'checking'" @click="checkHealth" class="btn btn-ghost btn-xs btn-circle ml-0.5 touch-manipulation" :title="t('topbar.refreshHealth')" :aria-label="t('topbar.refreshHealth')">
               <ArrowPathIcon class="w-3 h-3" :class="{ 'animate-spin': healthStatus === 'checking' }" />
             </button>
           </div>
@@ -496,7 +529,8 @@ onUnmounted(() => {
             type="button"
             class="btn btn-ghost btn-sm px-2 font-mono text-xs touch-manipulation select-none"
             :title="t('topbar.switchLang')"
-            aria-label="Switch Language"
+            :aria-label="t('topbar.switchLang')"
+            data-testid="language-toggle"
             @click="toggleLocale"
           >
             {{ currentLocale === 'zh-CN' ? '中 / EN' : 'EN / 中' }}
@@ -507,15 +541,17 @@ onUnmounted(() => {
             ref="themeDropdownRef"
             class="dropdown dropdown-end shrink-0"
             :class="{ 'dropdown-open': isThemeOpen }"
-            @keydown.esc="closeThemeDropdown"
+            @keydown="handleThemeKeydown"
           >
             <button
               ref="themeToggleBtnRef"
               type="button"
               tabindex="0"
               class="btn btn-ghost btn-sm btn-circle touch-manipulation"
-              aria-label="Toggle Theme"
-              aria-haspopup="true"
+              :aria-label="uiText('切换主题', 'Choose theme')"
+              data-testid="theme-toggle"
+              aria-haspopup="menu"
+              aria-controls="theme-options"
               :aria-expanded="isThemeOpen ? 'true' : 'false'"
               @click="toggleThemeDropdown"
             >
@@ -523,15 +559,18 @@ onUnmounted(() => {
               <MoonIcon v-else class="w-5 h-5" />
             </button>
             <ul
-              tabindex="0"
-              class="dropdown-content menu p-2 shadow-lg bg-base-200 rounded-box w-40 z-30 border border-base-300 text-xs mt-1 max-h-[calc(100vh-5rem)] overflow-y-auto"
+              v-show="isThemeOpen"
+              id="theme-options"
+              class="dropdown-content menu p-2 shadow-lg bg-base-200 rounded-box w-44 z-30 border border-base-300 text-sm mt-1 max-h-[calc(100dvh-5rem)] overflow-y-auto"
               role="menu"
-              aria-label="Themes"
+              :aria-label="t('themes.label')"
             >
               <li v-for="tName in themes" :key="tName" role="none">
                 <button
                   type="button"
-                  role="menuitem"
+                  role="menuitemradio"
+                  :aria-checked="currentTheme === tName"
+                  tabindex="-1"
                   @click="switchTheme(tName)"
                   class="capitalize touch-manipulation w-full text-left"
                   :class="{ 'menu-active': currentTheme === tName, 'active': currentTheme === tName }"
@@ -546,18 +585,23 @@ onUnmounted(() => {
 
       <!-- Main Body: routed content scroll container with dynamic clearance -->
       <main
-        class="flex-1 p-3 sm:p-6 max-w-7xl w-full mx-auto space-y-6 overflow-x-hidden"
+        :inert="drawerStack.length > 0"
+        id="main-content"
+        tabindex="-1"
+        :aria-label="currentTitle"
+        class="csp-main flex-1 p-3 sm:p-6 max-w-7xl w-full mx-auto space-y-6 overflow-x-hidden"
         :style="contentInsetStyle"
       >
+        <h1 class="sr-only">{{ currentTitle }}</h1>
         <!-- 1. Probing Skeleton -->
-        <div v-if="authState === 'probing'" class="space-y-4 animate-pulse p-4" data-testid="auth-probing-skeleton">
+        <div v-if="authState === 'probing'" role="status" :aria-label="uiText('正在检查访问状态', 'Checking access')" class="space-y-4 animate-pulse p-4" data-testid="auth-probing-skeleton">
           <div class="h-8 bg-base-300 rounded w-1/4"></div>
           <div class="h-32 bg-base-300 rounded"></div>
           <div class="h-64 bg-base-300 rounded"></div>
         </div>
 
         <!-- 2. Probing Error -->
-        <div v-else-if="authState === 'error'" class="alert alert-error shadow-lg" data-testid="auth-error-alert">
+        <div v-else-if="authState === 'error'" role="alert" class="alert alert-error shadow-lg flex flex-wrap [overflow-wrap:anywhere]" data-testid="auth-error-alert">
           <div>
             <h3 class="font-bold">{{ t('topbar.authProbeError') }}</h3>
             <div class="text-xs">{{ authErrorMessage || t('topbar.authProbeErrorDesc') }}</div>
@@ -580,10 +624,11 @@ onUnmounted(() => {
 
       <!-- Mobile Bottom Navigation: 4 items (Nodes, Policy, Subscriptions, More) -->
       <nav
+        :inert="drawerStack.length > 0"
         ref="dockRef"
         data-testid="mobile-dock"
-        class="md:hidden fixed bottom-3 sm:bottom-4 inset-x-3 sm:inset-x-6 mx-auto max-w-md py-2 px-2.5 bg-base-200/90 backdrop-blur-xl border border-white/10 shadow-2xl rounded-2xl z-20 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] touch-manipulation select-none"
-        aria-label="Mobile Navigation Dock"
+        class="csp-mobile-dock md:hidden fixed bottom-3 sm:bottom-4 inset-x-3 sm:inset-x-6 mx-auto max-w-md py-2 px-2.5 bg-base-200/90 backdrop-blur-xl border border-white/10 shadow-2xl rounded-2xl z-20 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] touch-manipulation select-none"
+        :aria-label="uiText('移动导航', 'Mobile navigation')"
       >
         <!-- Single 4-column row -->
         <div class="grid grid-cols-4 gap-1.5 w-full">
@@ -595,18 +640,17 @@ onUnmounted(() => {
             custom
             v-slot="{ href, isActive }"
           >
-            <button
+            <a
               :href="href"
-              type="button"
               :aria-current="(isActive || isItemActive(item)) ? 'page' : undefined"
               :data-testid="`dock-link-${item.id}`"
-              @click="handleNavigation(item.id, item.path)"
-              class="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[10px] sm:text-xs font-medium transition-all duration-150 touch-manipulation select-none active:scale-95 cursor-pointer"
+              @click="handleNavigation(item.id, item.path, $event)"
+              class="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-xs font-medium transition-all duration-150 touch-manipulation select-none active:scale-95 cursor-pointer"
               :class="isActive || isItemActive(item) ? 'bg-primary/15 text-primary font-semibold shadow-sm' : 'text-base-content/70 hover:text-base-content hover:bg-base-300/40'"
             >
               <component :is="item.icon" class="w-4 h-4 sm:w-5 sm:h-5 mb-0.5 shrink-0" />
               <span class="truncate max-w-full leading-tight text-center">{{ navItemLabel(item) }}</span>
-            </button>
+            </a>
           </RouterLink>
 
           <!-- 4. More Button -->
@@ -617,70 +661,27 @@ onUnmounted(() => {
             class="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[10px] sm:text-xs font-medium transition-all duration-150 touch-manipulation select-none active:scale-95 cursor-pointer"
             :class="isMoreActive || isMoreOpen ? 'bg-primary/15 text-primary font-semibold shadow-sm' : 'text-base-content/70 hover:text-base-content hover:bg-base-300/40'"
             :aria-expanded="isMoreOpen ? 'true' : 'false'"
-            aria-label="More Navigation Options"
+            :aria-label="uiText('更多页面', 'More pages')"
+            aria-haspopup="dialog"
           >
             <EllipsisHorizontalIcon class="w-4 h-4 sm:w-5 sm:h-5 mb-0.5 shrink-0" />
             <span class="truncate max-w-full leading-tight text-center">{{ uiText('更多', 'More') }}</span>
           </button>
         </div>
 
-        <!-- Mobile "More" Drawer / Sheet for the remaining 5 routes -->
-        <Teleport to="body">
-          <div v-if="isMoreOpen" class="md:hidden fixed inset-0 z-50 flex flex-col justify-end">
-            <!-- Backdrop -->
-            <div
-              class="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
-              aria-hidden="true"
-              @click="closeMore"
-            />
-
-            <!-- More Content Sheet -->
-            <div
-              class="relative z-10 w-full bg-base-200/95 backdrop-blur-2xl border-t border-white/10 shadow-2xl rounded-t-3xl p-4 pb-[max(1.5rem,calc(1rem+env(safe-area-inset-bottom,0px)))] space-y-3"
-              role="dialog"
-              aria-modal="true"
-              aria-label="More Navigation Pages"
-              data-testid="mobile-more-sheet"
-            >
-              <!-- Grab handle & header -->
-              <div class="flex items-center justify-between px-2 pt-1 pb-2 border-b border-base-300/40">
-                <span class="text-sm font-bold text-base-content">{{ uiText('更多页面', 'More Pages') }}</span>
-                <button
-                  type="button"
-                  class="btn btn-ghost btn-circle btn-xs text-base-content/60"
-                  aria-label="Close more navigation"
-                  @click="closeMore"
-                >
-                  <XMarkIcon class="w-4 h-4" />
-                </button>
-              </div>
-
-              <!-- 5 Secondary Route Options in Grid -->
-              <div class="grid grid-cols-2 gap-2">
-                <RouterLink
-                  v-for="item in mobileMoreItems"
-                  :key="item.id"
-                  :to="item.path"
-                  custom
-                  v-slot="{ href, isActive }"
-                >
-                  <button
-                    :href="href"
-                    type="button"
-                    :aria-current="(isActive || isItemActive(item)) ? 'page' : undefined"
-                    :data-testid="`dock-link-${item.id}`"
-                    @click="handleNavigation(item.id, item.path)"
-                    class="flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-medium transition-colors text-left w-full cursor-pointer"
-                    :class="isActive || isItemActive(item) ? 'bg-primary text-primary-content shadow-sm font-semibold' : 'bg-base-100/60 hover:bg-base-100 text-base-content/80'"
-                  >
-                    <component :is="item.icon" class="w-4 h-4 shrink-0" />
-                    <span class="truncate">{{ navItemLabel(item) }}</span>
-                  </button>
-                </RouterLink>
-              </div>
-            </div>
+        <Drawer v-model="isMoreOpen" :title="uiText('更多页面', 'More pages')" width-class="md:max-w-md">
+          <div data-testid="mobile-more-sheet" class="grid grid-cols-2 gap-3">
+            <RouterLink v-for="item in mobileMoreItems" :key="item.id" :to="item.path" custom v-slot="{ href, isActive }">
+              <a :href="href" :aria-current="(isActive || isItemActive(item)) ? 'page' : undefined"
+                :data-testid="`dock-link-${item.id}`" @click="handleNavigation(item.id, item.path, $event)"
+                class="flex items-center gap-3 p-3 rounded-xl text-sm font-medium transition-colors"
+                :class="isActive || isItemActive(item) ? 'bg-primary/15 text-primary' : 'bg-base-200 hover:bg-base-300'">
+                <component :is="item.icon" class="w-5 h-5 shrink-0" />
+                <span class="break-words min-w-0">{{ navItemLabel(item) }}</span>
+              </a>
+            </RouterLink>
           </div>
-        </Teleport>
+        </Drawer>
       </nav>
     </div>
   </div>

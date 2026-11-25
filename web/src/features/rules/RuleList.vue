@@ -32,6 +32,7 @@ const props = defineProps<{
   searchQuery: string
   groupNameMap: Map<string, string>
   collapsedCategories: Record<string, boolean>
+  busy?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -44,6 +45,11 @@ const emit = defineEmits<{
   'move-category': [categoryId: string, direction: 'up' | 'down']
   'clear-search': []
 }>()
+
+function retainSavedToggle(event: Event) {
+  const input = event.target
+  if (input instanceof HTMLInputElement && input.type === 'checkbox') input.checked = !input.checked
+}
 
 function groupName(id: string): string {
   return displayName(props.groupNameMap.get(id), uiText('未知策略组（引用已失效）', 'Unavailable policy group'), id)
@@ -81,7 +87,7 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <fieldset class="space-y-4 min-w-0" :disabled="busy" :aria-busy="busy" @change.capture="retainSavedToggle">
     <!-- Search Active Notice Banner -->
     <div
       v-if="isSearching"
@@ -862,5 +868,5 @@ function hasTerminalRule(list: PolicyRuleView[]): boolean {
         </div>
       </div>
     </template>
-  </div>
+  </fieldset>
 </template>

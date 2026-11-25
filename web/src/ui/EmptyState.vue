@@ -23,7 +23,7 @@ const emit = defineEmits<EmptyStateEmits>()
 
 <template>
   <div
-    class="rounded-box border border-dashed border-base-300 bg-base-200/40 p-8 sm:p-12 text-center flex flex-col items-center justify-center transition-colors"
+    class="csp-empty-state p-6 sm:p-10 text-center flex flex-col items-center justify-center transition-colors min-w-0"
     data-testid="empty-state"
   >
     <!-- Icon Slot / Prop -->
@@ -44,7 +44,7 @@ const emit = defineEmits<EmptyStateEmits>()
     <!-- Description -->
     <p
       v-if="description || $slots.description"
-      class="mt-1.5 text-xs sm:text-sm text-base-content/70 max-w-md mx-auto leading-relaxed"
+      class="mt-2 text-sm text-base-content/75 max-w-lg mx-auto leading-relaxed"
     >
       <slot name="description">{{ description }}</slot>
     </p>

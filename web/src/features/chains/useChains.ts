@@ -24,10 +24,14 @@ export function useChains() {
     subscriptions: [],
   })
   const optionsLoading = ref(false)
+  const optionsLoaded = ref(false)
+  const optionsError = ref<string | null>(null)
 
   const effects = ref<ChainEffect[]>([])
   const nodes = ref<EffectNode[]>([])
   const effectsLoading = ref(false)
+  const effectsLoaded = ref(false)
+  const effectsVersion = ref('')
   const effectsError = ref<string | null>(null)
 
   // Per-row busy & error tracking
@@ -47,12 +51,14 @@ export function useChains() {
       const res = await api.get<ProxyChainConfig>('/api/v1/proxy-chains')
       bindings.value = res.bindings || []
       configVersion.value = res.version || ''
+      return true
     } catch (err: any) {
       if (err instanceof ApiError) {
         error.value = displayText(err.message)
       } else {
         error.value = displayText(err?.message || 'Failed to load proxy chain bindings')
       }
+      return false
     } finally {
       loading.value = false
     }
@@ -60,6 +66,7 @@ export function useChains() {
 
   async function loadOptions() {
     optionsLoading.value = true
+    optionsError.value = null
     try {
       const res = await api.get<OptionsResult>('/api/v1/proxy-chains/options')
       options.value = {
@@ -67,8 +74,11 @@ export function useChains() {
         groups: res.groups || [],
         subscriptions: res.subscriptions || [],
       }
-    } catch {
-      // Non-fatal, options can be retried or empty
+      optionsLoaded.value = true
+      return true
+    } catch (err: any) {
+      optionsError.value = displayText(err?.message || uiText('候选对象读取失败，请刷新后重试', 'Unable to load eligible options; refresh and retry'))
+      return false
     } finally {
       optionsLoading.value = false
     }
@@ -81,19 +91,24 @@ export function useChains() {
       const res = await api.get<EffectsResult>('/api/v1/proxy-chains/effects')
       effects.value = res.effects || []
       nodes.value = res.nodes || []
+      effectsVersion.value = res.version
+      effectsLoaded.value = true
+      return true
     } catch (err: any) {
       if (err instanceof ApiError) {
         effectsError.value = displayText(err.message)
       } else {
         effectsError.value = displayText(err?.message || 'Failed to load resolved chain effects')
       }
+      return false
     } finally {
       effectsLoading.value = false
     }
   }
 
   async function loadAll() {
-    await Promise.all([loadBindings(), loadOptions(), loadEffects()])
+    const [bindingsLoaded, optionsLoaded] = await Promise.all([loadBindings(), loadOptions(), loadEffects()])
+    return bindingsLoaded && optionsLoaded
   }
 
   /**
@@ -237,9 +252,13 @@ export function useChains() {
     error,
     options,
     optionsLoading,
+    optionsLoaded,
+    optionsError,
     effects,
     nodes,
     effectsLoading,
+    effectsLoaded,
+    effectsVersion,
     effectsError,
     rowBusy,
     rowError,

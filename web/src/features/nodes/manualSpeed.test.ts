@@ -34,6 +34,8 @@ describe('explicit single-node manual speed', () => {
 
   it.each([
     ['failed', record()],
+    ['cancelled', record()],
+    ['expired', record()],
     ['succeeded', record({ verdict: 'error' })],
     ['succeeded', record({ stale: true })],
     ['succeeded', record({ observed_at: '2026-11-14T12:00:00Z' })],
@@ -61,6 +63,15 @@ describe('explicit single-node manual speed', () => {
     expect(get).toHaveBeenCalledWith('/api/v1/probes/runs/run_private')
   })
 
+  it('does not reject a first server observation solely because the browser clock is ahead', async () => {
+    const hook = useNodes()
+    hook.items.value = [normalizeNode({ logical_id: 'node_private', display_name: 'Fixture', protocol: 'ss', active: true })]
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-15T12:05:00Z'))
+    vi.spyOn(api, 'post').mockResolvedValue({ run_id: 'run_private', state: 'succeeded' })
+    vi.spyOn(api, 'get').mockResolvedValue(record())
+    expect((await hook.measureNodeSpeed('node_private')).ok).toBe(true)
+  })
+
   it('rejects blank targets and reports request failures without changing old observations into success', async () => {
     const hook = useNodes()
     const post = vi.spyOn(api, 'post').mockRejectedValue(new Error('request failed'))
@@ -72,6 +83,29 @@ describe('explicit single-node manual speed', () => {
 })
 
 describe('persisted speed presentation', () => {
+  it.each([
+    ['failed', '上次检测失败'],
+    ['cancelled', '上次检测已取消'],
+    ['expired', '上次检测已超时'],
+  ] as const)('keeps the ordinary probe %s outcome visible on the idle row and permits retry', async (probeRunState, label) => {
+    const host = document.createElement('div')
+    const probe = vi.fn()
+    const app = createApp({ render: () => h(NodeCompactRow, {
+      node: normalizeNode(record()), selected: false, probeState: 'idle', probeRunState, onProbeNode: probe,
+    }) })
+    try {
+      app.mount(host)
+      await nextTick()
+      expect(host.querySelector('[data-testid="node-probe-terminal-state-badge"]')?.textContent).toContain(label)
+      const button = host.querySelector<HTMLButtonElement>('[data-testid="node-card-probe-btn"]')!
+      expect(button.disabled).toBe(false)
+      button.click()
+      expect(probe).toHaveBeenCalledOnce()
+    } finally {
+      app.unmount()
+    }
+  })
+
   it('shows saved speed and timestamp, but never a current successful number for stale/error/busy/latest-failed states', async () => {
     for (const [speed, props, expected] of [
       [{}, {}, '2.0 MB/s'],

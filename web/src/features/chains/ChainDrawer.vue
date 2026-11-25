@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   ArrowPathIcon,
   ExclamationTriangleIcon,
@@ -15,13 +15,18 @@ import type { OptionsResult, OptionItem } from './types'
 const props = defineProps<{
   draftManager: UseChainDraftReturn
   options: OptionsResult
+  optionsVerified?: boolean
+  optionsLoading?: boolean
   currentConfigVersion: string
+  recoveryError?: string | null
+  recovering?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'reload'): void
   (e: 'rebase'): void
+  (e: 'retry-options'): void
 }>()
 
 const {
@@ -44,7 +49,6 @@ const {
   setEnabled,
   setSortOrder,
   setNote,
-  rebaseAndKeepDraft,
   triggerPreview,
   save,
 } = props.draftManager
@@ -78,7 +82,7 @@ const targetOptions = computed<OptionItem[]>(() => {
 
 // Check if selected target_id is missing from options
 const isTargetMissing = computed(() => {
-  if (!draft.value.target_id) return false
+  if (!props.optionsVerified || !draft.value.target_id) return false
   return !targetOptions.value.some((o) => o.id === draft.value.target_id)
 })
 
@@ -95,9 +99,31 @@ const dialerOptions = computed<OptionItem[]>(() => {
 
 // Check if selected dialer_id is missing from options
 const isDialerMissing = computed(() => {
-  if (!draft.value.dialer_id) return false
+  if (!props.optionsVerified || !draft.value.dialer_id) return false
   return !dialerOptions.value.some((o) => o.id === draft.value.dialer_id)
 })
+
+const targetSearch = ref('')
+const dialerSearch = ref('')
+const candidateLimit = 50
+const targetLimit = ref(candidateLimit)
+const dialerLimit = ref(candidateLimit)
+function matchingOptions(items: OptionItem[], query: string) {
+  const q = query.trim().toLocaleLowerCase()
+  return items.filter((item) => !q || `${item.name} ${item.id}`.toLocaleLowerCase().includes(q))
+}
+const matchingTargets = computed(() => matchingOptions(targetOptions.value, targetSearch.value))
+const matchingDialers = computed(() => matchingOptions(dialerOptions.value, dialerSearch.value))
+const visibleTargets = computed(() => matchingTargets.value.slice(0, targetLimit.value))
+const visibleDialers = computed(() => matchingDialers.value.slice(0, dialerLimit.value))
+const selectedTarget = computed(() => targetOptions.value.find((item) => item.id === draft.value.target_id))
+const selectedDialer = computed(() => dialerOptions.value.find((item) => item.id === draft.value.dialer_id))
+const targetSelectionVisible = computed(() => visibleTargets.value.some((item) => item.id === draft.value.target_id))
+const dialerSelectionVisible = computed(() => visibleDialers.value.some((item) => item.id === draft.value.dialer_id))
+watch([isOpen, () => draft.value.target_type], () => { targetSearch.value = ''; targetLimit.value = candidateLimit })
+watch([isOpen, () => draft.value.dialer_type], () => { dialerSearch.value = ''; dialerLimit.value = candidateLimit })
+watch(targetSearch, () => { targetLimit.value = candidateLimit })
+watch(dialerSearch, () => { dialerLimit.value = candidateLimit })
 
 const hasMissingReference = computed(() => {
   return isTargetMissing.value || isDialerMissing.value
@@ -138,10 +164,12 @@ function handleToggleEnabled() {
 }
 
 function handleRebase() {
+  if (saving.value || props.recovering) return
   emit('rebase')
 }
 
 function handleReloadConfirm() {
+  if (saving.value || props.recovering) return
   if (isDirty.value) {
     const ok = window.confirm(
       uiText(
@@ -155,6 +183,7 @@ function handleReloadConfirm() {
 }
 
 async function handleSaveClick() {
+  if (saving.value || props.recovering) return
   await save()
 }
 </script>
@@ -165,10 +194,19 @@ async function handleSaveClick() {
     :title="drawerTitle"
     :description="drawerDesc"
     width-class="md:max-w-xl"
-    @update:model-value="(val: boolean) => { if (!val) $emit('close') }"
-    @close="$emit('close')"
+    @update:model-value="(val: boolean) => { if (!val && !saving && !recovering) $emit('close') }"
   >
     <div class="space-y-5" data-testid="chain-drawer">
+      <div
+        v-if="recoveryError"
+        class="alert alert-error shadow-sm rounded-xl p-3 text-xs flex items-start gap-2"
+        data-testid="chain-recovery-error"
+        role="alert"
+      >
+        <ExclamationTriangleIcon class="w-4 h-4 shrink-0 mt-0.5" />
+        <span class="min-w-0 flex-1 break-words">{{ displayText(recoveryError) }}</span>
+      </div>
+
       <!-- 409 Conflict Banner -->
       <div
         v-if="conflictState"
@@ -181,7 +219,7 @@ async function handleSaveClick() {
             <h4 class="text-sm font-bold text-base-content">
               {{ uiText('并发修改冲突 (409 Conflict)', 'Concurrent Conflict (409)') }}
             </h4>
-            <p class="text-xs text-base-content/80 mt-1 leading-relaxed">
+            <p class="text-xs text-base-content/80 mt-1 leading-relaxed break-words">
               {{ displayText(conflictState.message) }}
             </p>
             <p class="text-xs text-base-content/60 mt-1">
@@ -197,16 +235,18 @@ async function handleSaveClick() {
         <div class="flex flex-wrap items-center gap-2 justify-end pt-2 border-t border-base-content/10">
           <button
             type="button"
-            class="btn btn-xs btn-ghost"
+            class="btn btn-sm btn-ghost whitespace-normal h-auto min-h-8 py-2 flex-1 basis-44"
             data-testid="chain-conflict-reload-btn"
+            :disabled="saving || recovering"
             @click="handleReloadConfirm"
           >
             {{ uiText('放弃修改并重新加载', 'Discard & Reload') }}
           </button>
           <button
             type="button"
-            class="btn btn-xs btn-primary font-semibold"
+            class="btn btn-sm btn-primary font-semibold whitespace-normal h-auto min-h-8 py-2 flex-1 basis-44"
             data-testid="chain-conflict-rebase-btn"
+            :disabled="saving || recovering"
             @click="handleRebase"
           >
             {{ uiText('保留草稿并基于新版本重试', 'Keep Draft & Rebase') }}
@@ -219,9 +259,10 @@ async function handleSaveClick() {
         v-if="saveError"
         class="alert alert-error shadow-sm rounded-xl p-3 text-xs flex items-center gap-2"
         data-testid="chain-save-error"
+        role="alert"
       >
         <ExclamationTriangleIcon class="w-4 h-4 shrink-0" />
-        <span class="flex-1 font-medium">{{ displayText(saveError) }}</span>
+        <span class="min-w-0 flex-1 font-medium break-words">{{ displayText(saveError) }}</span>
       </div>
 
       <!-- Priority Information Card -->
@@ -260,8 +301,13 @@ async function handleSaveClick() {
         </p>
       </div>
 
+      <div v-if="!optionsVerified" role="status" class="rounded-xl bg-info/10 border border-info/30 p-3 text-xs space-y-2" data-testid="chain-options-unverified">
+        <p class="break-words">{{ uiText('候选对象尚未确认，以下名称可能来自上次读取，不能据此判断引用失效。现有值和草稿保持不变，可以重试读取或停用此绑定。', 'Options are unverified. Names may be cached; missing references cannot be confirmed. Existing values and your draft are preserved. Retry options or disable this binding.') }}</p>
+        <button type="button" class="btn btn-xs btn-outline" :disabled="optionsLoading || saving || recovering" @click="$emit('retry-options')">{{ uiText('重试候选读取', 'Retry options') }}</button>
+      </div>
+
       <!-- Form Grid -->
-      <div class="space-y-4">
+      <fieldset class="space-y-4 min-w-0" :disabled="saving || recovering">
         <!-- Target Type & ID -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div class="form-control">
@@ -283,10 +329,15 @@ async function handleSaveClick() {
           <div class="form-control sm:col-span-2">
             <label class="label py-1 text-xs font-medium text-base-content/80 flex items-center justify-between">
               <span>{{ uiText('出口目标实体', 'Target Entity') }}</span>
-              <span v-if="isTargetMissing" class="badge badge-warning badge-xs">
+              <span v-if="!props.optionsVerified" class="badge badge-info badge-xs">
+                {{ uiText('待确认', 'Unverified') }}
+              </span>
+              <span v-else-if="isTargetMissing" class="badge badge-warning badge-xs">
                 {{ uiText('已失效', 'Missing Ref') }}
               </span>
             </label>
+            <input v-model="targetSearch" type="search" class="input input-bordered input-sm w-full mb-2" :aria-label="uiText('搜索出口目标', 'Search targets')" :placeholder="uiText('按名称搜索出口目标', 'Search targets by name')" data-testid="chain-target-search" />
+            <p class="text-xs text-base-content/60 mb-1" role="status">{{ uiText('匹配', 'Matches') }} {{ matchingTargets.length }} / {{ targetOptions.length }} · {{ uiText('已显示', 'Shown') }} {{ visibleTargets.length }}</p>
             <select
               :value="draft.target_id"
               class="select select-bordered select-sm w-full"
@@ -301,13 +352,22 @@ async function handleSaveClick() {
                 {{ uiText('目标已失效，请重新选择', 'Target unavailable; select again') }}
               </option>
               <option
-                v-for="opt in targetOptions"
+                v-else-if="draft.target_id && !selectedTarget"
+                :value="draft.target_id"
+                disabled
+              >
+                {{ uiText('目标待确认，刷新候选后可修复', 'Target unverified; refresh options to repair') }}
+              </option>
+              <option v-if="selectedTarget && !targetSelectionVisible" :value="selectedTarget.id">{{ displayName(selectedTarget.name, uiText('未命名目标', 'Unnamed target'), selectedTarget.id) }} · {{ uiText('当前选择', 'Selected') }}</option>
+              <option
+                v-for="opt in visibleTargets"
                 :key="opt.id"
                 :value="opt.id"
               >
                 {{ displayName(opt.name, uiText('未命名目标', 'Unnamed target'), opt.id) }}
               </option>
             </select>
+            <button v-if="matchingTargets.length > visibleTargets.length" type="button" class="btn btn-xs btn-ghost mt-1" @click="targetLimit += candidateLimit">{{ uiText('再显示 50 个目标，或继续搜索', 'Show 50 more targets, or refine search') }}</button>
           </div>
         </div>
 
@@ -331,10 +391,15 @@ async function handleSaveClick() {
           <div class="form-control sm:col-span-2">
             <label class="label py-1 text-xs font-medium text-base-content/80 flex items-center justify-between">
               <span>{{ uiText('前置跳板实体', 'Dialer Entity') }}</span>
-              <span v-if="isDialerMissing" class="badge badge-warning badge-xs">
+              <span v-if="!props.optionsVerified" class="badge badge-info badge-xs">
+                {{ uiText('待确认', 'Unverified') }}
+              </span>
+              <span v-else-if="isDialerMissing" class="badge badge-warning badge-xs">
                 {{ uiText('已失效', 'Missing Ref') }}
               </span>
             </label>
+            <input v-model="dialerSearch" type="search" class="input input-bordered input-sm w-full mb-2" :aria-label="uiText('搜索前置跳板', 'Search dialers')" :placeholder="uiText('按名称搜索前置跳板', 'Search dialers by name')" data-testid="chain-dialer-search" />
+            <p class="text-xs text-base-content/60 mb-1" role="status">{{ uiText('匹配', 'Matches') }} {{ matchingDialers.length }} / {{ dialerOptions.length }} · {{ uiText('已显示', 'Shown') }} {{ visibleDialers.length }}</p>
             <select
               :value="draft.dialer_id"
               class="select select-bordered select-sm w-full"
@@ -349,13 +414,22 @@ async function handleSaveClick() {
                 {{ uiText('跳板已失效，请重新选择', 'Dialer unavailable; select again') }}
               </option>
               <option
-                v-for="opt in dialerOptions"
+                v-else-if="draft.dialer_id && !selectedDialer"
+                :value="draft.dialer_id"
+                disabled
+              >
+                {{ uiText('跳板待确认，刷新候选后可修复', 'Dialer unverified; refresh options to repair') }}
+              </option>
+              <option v-if="selectedDialer && !dialerSelectionVisible" :value="selectedDialer.id">{{ displayName(selectedDialer.name, uiText('未命名跳板', 'Unnamed dialer'), selectedDialer.id) }} · {{ uiText('当前选择', 'Selected') }}</option>
+              <option
+                v-for="opt in visibleDialers"
                 :key="opt.id"
                 :value="opt.id"
               >
                 {{ displayName(opt.name, uiText('未命名跳板', 'Unnamed dialer'), opt.id) }}
               </option>
             </select>
+            <button v-if="matchingDialers.length > visibleDialers.length" type="button" class="btn btn-xs btn-ghost mt-1" @click="dialerLimit += candidateLimit">{{ uiText('再显示 50 个跳板，或继续搜索', 'Show 50 more dialers, or refine search') }}</button>
           </div>
         </div>
 
@@ -408,14 +482,14 @@ async function handleSaveClick() {
             @input="handleNoteChange"
           />
         </div>
-      </div>
+      </fieldset>
 
       <!-- Live Preview Section -->
       <div
         class="border border-base-300 rounded-2xl p-4 bg-base-200/40 space-y-3"
         data-testid="chain-preview-card"
       >
-        <div class="flex items-center justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex items-center gap-2">
             <h4 class="text-xs font-bold text-base-content tracking-wide uppercase">
               {{ uiText('实时效果预览 (250ms 防抖)', 'Live Preview (250ms Debounced)') }}
@@ -515,7 +589,7 @@ async function handleSaveClick() {
                 class="text-[11px] text-warning flex items-center gap-1.5"
               >
                 <span>•</span>
-                <span>{{ displayText(d.message) }}</span>
+                <span class="min-w-0 break-words">{{ displayText(d.message) }}</span>
               </div>
             </div>
           </div>
@@ -529,11 +603,12 @@ async function handleSaveClick() {
 
     <!-- Drawer Footer Actions -->
     <template #footer>
-      <div class="flex items-center justify-between w-full">
+      <div class="flex flex-wrap items-center justify-between gap-3 w-full min-w-0">
         <button
           type="button"
           class="btn btn-ghost btn-sm"
           data-testid="chain-cancel-btn"
+          :disabled="saving || recovering"
           @click="$emit('close')"
         >
           {{ uiText('取消', 'Cancel') }}
@@ -543,7 +618,7 @@ async function handleSaveClick() {
           type="button"
           class="btn btn-primary btn-sm px-5 font-semibold gap-2"
           :class="{ loading: saving }"
-          :disabled="saving"
+          :disabled="saving || recovering"
           data-testid="chain-save-btn"
           @click="handleSaveClick"
         >

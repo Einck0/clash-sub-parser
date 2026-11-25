@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
+import { drawerStack } from './drawerStack'
+import { uiText } from '../locales'
 import { onClickOutside } from '@vueuse/core'
 
 const props = withDefaults(
   defineProps<{
     placement?: 'bottom-end' | 'bottom-start' | 'top-end' | 'top-start'
     panelClass?: string
+    label?: string
   }>(),
   { placement: 'bottom-end', panelClass: 'w-48' }
 )
@@ -14,6 +17,14 @@ const isOpen = ref(false)
 const triggerRef = ref<HTMLElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
 const panelStyle = ref<Record<string, string>>({ visibility: 'hidden' })
+const panelId = `popover-${useId()}`
+const teleportTarget = ref<Element | string>('body')
+const layer = computed(() => 50 + drawerStack.value.length)
+
+function menuItems(): HTMLElement[] {
+  return Array.from(panelRef.value?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [role="menuitem"][tabindex]') || [])
+    .filter((item) => !item.closest('[hidden], [inert]') && item.getAttribute('aria-disabled') !== 'true')
+}
 let observer: ResizeObserver | undefined
 
 function viewport() {
@@ -72,7 +83,10 @@ function close(restoreFocus = true) {
   isOpen.value = false
   if (restoreFocus) triggerRef.value?.querySelector<HTMLElement>('button, [tabindex], a')?.focus()
 }
-function open() { isOpen.value = true }
+function open() {
+  teleportTarget.value = triggerRef.value?.closest('dialog') || 'body'
+  isOpen.value = true
+}
 function toggle() { isOpen.value ? close() : open() }
 
 watch(isOpen, async (openNow) => {
@@ -93,18 +107,36 @@ watch(isOpen, async (openNow) => {
     observer.observe(panelRef.value)
     if (triggerRef.value) observer.observe(triggerRef.value)
   }
-  panelRef.value.querySelector<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]')?.focus()
+  menuItems()[0]?.focus()
 })
+
+watch(drawerStack, () => { if (isOpen.value) close(false) })
 
 onClickOutside(panelRef, (event) => {
   if (triggerRef.value?.contains(event.target as Node)) return
   close(false)
 })
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && isOpen.value) {
-    event.preventDefault()
+  if (!isOpen.value) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      open()
+    }
+    return
+  }
+  if (event.key === 'Escape' || event.key === 'Tab') {
+    if (event.key === 'Escape') event.preventDefault()
     event.stopPropagation()
     close(true)
+    return
+  }
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault()
+    const items = menuItems()
+    const current = items.indexOf(document.activeElement as HTMLElement)
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+      : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+    items[index]?.focus()
   }
 }
 onUnmounted(stopPositioning)
@@ -115,16 +147,19 @@ defineExpose({ isOpen, open, close, toggle })
 <template>
   <div class="relative inline-block text-left" @keydown="handleKeydown">
     <div ref="triggerRef" class="inline-flex" @click="toggle">
-      <slot name="trigger" :open="isOpen" />
+      <slot name="trigger" :open="isOpen" :panel-id="panelId" />
     </div>
-    <Teleport to="body">
+    <Teleport :to="teleportTarget">
       <div
         v-if="isOpen"
         ref="panelRef"
-        class="z-40 rounded-2xl bg-base-200/95 backdrop-blur-2xl border border-white/10 shadow-2xl p-1.5 outline-none overflow-y-auto overscroll-contain"
+        :id="panelId"
+        data-popover-panel
+        class="csp-overlay rounded-2xl bg-base-200/95 backdrop-blur-2xl border border-white/10 shadow-2xl p-1.5 outline-none overflow-y-auto overscroll-contain"
         :class="panelClass"
-        :style="panelStyle"
+        :style="{ ...panelStyle, zIndex: layer }"
         role="menu"
+        :aria-label="label || uiText('更多操作', 'More actions')"
         aria-orientation="vertical"
         tabindex="-1"
         @keydown="handleKeydown"

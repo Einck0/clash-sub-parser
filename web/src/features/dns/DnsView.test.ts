@@ -96,6 +96,7 @@ describe('DNS settings page (DnsView)', () => {
         enabled: body.enabled !== undefined ? body.enabled : currentSettings.enabled,
         raw_yaml: body.raw_yaml !== undefined ? body.raw_yaml : currentSettings.raw_yaml,
         revision: currentSettings.revision + 1,
+        config: { ...(yaml.load(body.raw_yaml) as Record<string, unknown>), enable: body.enabled },
       }
       return { ...currentSettings }
     })
@@ -107,6 +108,77 @@ describe('DNS settings page (DnsView)', () => {
     document.body.innerHTML = ''
     setLocale('zh-CN')
     vi.restoreAllMocks()
+  })
+
+  it('does not present an unreadable initial configuration as defaults or editable settings', async () => {
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('DNS settings could not be read'))
+    mount()
+    await flush()
+
+    expect(mountEl.querySelector('[data-testid="dns-error"]')?.textContent).toContain('could not be read')
+    expect(mountEl.querySelector('[data-testid="dns-clean-badge"]')).toBeNull()
+    expect(mountEl.querySelector('[data-testid="dns-save"]')).toBeNull()
+    expect((mountEl.querySelector('[data-testid="dns-enabled"]') as HTMLInputElement).disabled).toBe(true)
+    expect((mountEl.querySelector('[data-testid="dns-raw-tab"]') as HTMLButtonElement).disabled).toBe(true)
+
+    ;(mountEl.querySelector('[data-testid="dns-error-retry"]') as HTMLButtonElement).click()
+    await flush()
+    expect(mountEl.querySelector('[data-testid="dns-common-section"]')).not.toBeNull()
+  })
+
+  it('finds advanced fields without discarding a pending quick-entry input or unknown keys', async () => {
+    mount()
+    await flush()
+    const addInput = mountEl.querySelector('[data-testid="dns-list-new-nameserver"]') as HTMLInputElement
+    addInput.value = '9.9.9.9'
+    addInput.dispatchEvent(new Event('input', { bubbles: true }))
+    const search = mountEl.querySelector('[data-testid="dns-field-search"]') as HTMLInputElement
+    search.value = 'proxy-server-nameserver-policy'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+
+    const groupToggle = mountEl.querySelector('[data-testid="dns-group-toggle-routing-policy"]') as HTMLButtonElement
+    expect(groupToggle.getAttribute('aria-expanded')).toBe('true')
+    expect((mountEl.querySelector('[data-testid="dns-group-content-routing-policy"]') as HTMLElement).style.display).not.toBe('none')
+    expect((mountEl.querySelector('[data-testid="dns-common-section"]') as HTMLElement).style.display).toBe('none')
+    expect(mountEl.querySelector('[data-testid="dns-dirty-badge"]')).toBeNull()
+    expect(mountEl.querySelector('[data-testid="dns-unknown-keys"]')?.textContent).toContain('extra')
+
+    ;(mountEl.querySelector('[data-testid="dns-raw-tab"]') as HTMLButtonElement).click()
+    await flush()
+    ;(mountEl.querySelector('[data-testid="dns-visual-tab"]') as HTMLButtonElement).click()
+    await flush()
+    const restoredInput = mountEl.querySelector('[data-testid="dns-list-new-nameserver"]') as HTMLInputElement
+    expect(restoredInput.value).toBe('9.9.9.9')
+    // The search input is remounted after switching back; clear the current control.
+    const currentSearch = mountEl.querySelector('[data-testid="dns-field-search"]') as HTMLInputElement
+    currentSearch.value = ''
+    currentSearch.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    ;(mountEl.querySelector('[data-testid="dns-list-add-nameserver"]') as HTMLButtonElement).click()
+    await flush()
+    expect((mountEl.querySelector('[aria-label="nameserver"]') as HTMLTextAreaElement).value).toContain('9.9.9.9')
+  })
+
+  it('shows read-back failure and confirms it without a second PUT', async () => {
+    mount()
+    await flush()
+    ;(mountEl.querySelector('[data-testid="dns-enabled"]') as HTMLInputElement).click()
+    await flush()
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('connection lost after write'))
+    ;(mountEl.querySelector('[data-testid="dns-save"]') as HTMLButtonElement).click()
+    await flush()
+
+    expect(api.put).toHaveBeenCalledTimes(1)
+    expect(mountEl.querySelector('[data-testid="dns-save-state"]')?.textContent).toContain('回读确认尚未完成')
+    expect(mountEl.querySelector('[data-testid="dns-error-retry"]')?.textContent).toContain('确认保存结果')
+    expect(mountEl.querySelector('[data-testid="dns-dirty-badge"]')).not.toBeNull()
+    ;(mountEl.querySelector('[data-testid="dns-error-retry"]') as HTMLButtonElement).click()
+    await flush()
+
+    expect(api.put).toHaveBeenCalledTimes(1)
+    expect(mountEl.querySelector('[data-testid="dns-save-state"]')).toBeNull()
+    expect(mountEl.querySelector('[data-testid="dns-clean-badge"]')).not.toBeNull()
   })
 
   it('renders top SharedSettingsSections navigation bar with active=dns', async () => {
@@ -386,6 +458,20 @@ describe('DNS settings page (DnsView)', () => {
     )
     expect((mountEl.querySelector('[data-testid="dns-raw-editor"]') as HTMLTextAreaElement).value).toBe('enable: false')
     expect(mountEl.querySelector('[data-testid="dns-error"]')?.textContent).toContain('revision 冲突')
+    expect(mountEl.querySelector('[data-testid="dns-save-state"]')?.textContent).toContain('服务器版本冲突')
+    expect((mountEl.querySelector('[data-testid="dns-save"]') as HTMLButtonElement).disabled).toBe(true)
+
+    currentSettings = {
+      ...currentSettings,
+      revision: 4,
+      raw_yaml: 'enable: true\nlisten: 192.0.2.53:53\n',
+      config: { enable: true, listen: '192.0.2.53:53' },
+    }
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(true)
+    ;(mountEl.querySelector('[data-testid="dns-error-retry"]') as HTMLButtonElement).click()
+    await flush()
+    expect(mountEl.querySelector('[data-testid="dns-save-state"]')).toBeNull()
+    expect((mountEl.querySelector('[data-testid="dns-raw-editor"]') as HTMLTextAreaElement).value).toBe('enable: true\nlisten: 192.0.2.53:53\n')
   })
 
   it('preserves draft and displays error on 422 validation failure', async () => {

@@ -268,11 +268,11 @@ describe('useProbes composable', () => {
     testApp.mount(mountEl)
     await nextTick()
 
-    const sheetDialog = mountEl.querySelector('[role="dialog"]')
+    const sheetDialog = document.body.querySelector('[role="dialog"]')
     expect(sheetDialog).not.toBeNull()
     expect(sheetDialog?.className).toContain('adaptive-surface-sheet')
-    expect(sheetDialog?.className).toContain('md:max-h-[82vh]')
-    expect(sheetDialog?.textContent).toContain('节点测速与可用性报告')
+    expect(sheetDialog?.className).toContain('md:max-h-full')
+    expect(sheetDialog?.textContent).toContain('检测证据')
     expect(sheetDialog?.textContent).toContain('已完成')
     expect(sheetDialog?.textContent).toContain('暂无观测记录')
 

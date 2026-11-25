@@ -62,8 +62,9 @@ describe('SubscriptionConfigDrawer DaisyUI 5 & Modern Contract Tests', () => {
           'onUpdate:modelValue': (val: boolean) => {
             updateModelEvents.push(val)
           },
-          onSave: (draft: SubscriptionDraft) => {
+          onSave: (draft: SubscriptionDraft, settled: (error?: string) => void) => {
             lastSavedDraft = draft
+            settled()
           },
         }),
     })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   ArrowPathIcon,
   EyeIcon,
@@ -14,6 +14,7 @@ import {
   DNS_COMMON_FIELDS,
   DNS_ADVANCED_GROUPS,
   getUnknownKeys,
+  matchesDnsField,
 } from './dnsFields'
 import DnsFieldControl from './DnsFieldControl.vue'
 import DnsGroupCard from './DnsGroupCard.vue'
@@ -26,6 +27,8 @@ const {
   mode,
   loading,
   saving,
+  saveNeedsConfirmation,
+  saveConflict,
   previewing,
   busy,
   previewYaml,
@@ -51,12 +54,20 @@ const {
   save,
 } = useDnsDraft()
 
+const fieldSearch = ref('')
+const matchingFieldCount = computed(() => [
+  ...DNS_COMMON_FIELDS,
+  ...DNS_ADVANCED_GROUPS.flatMap((group) => group.fields),
+].filter((field) => matchesDnsField(field, fieldSearch.value)).length)
+const commonMatches = computed(() => DNS_COMMON_FIELDS.some((field) => matchesDnsField(field, fieldSearch.value) || Boolean(fieldErrors.value[field.key])))
+const advancedMatches = computed(() => DNS_ADVANCED_GROUPS.some((group) => group.fields.some((field) => matchesDnsField(field, fieldSearch.value) || Boolean(fieldErrors.value[field.key]))))
+
 const unknownKeys = computed(() => {
   return getUnknownKeys(draft.value)
 })
 
 const dnsDisabledNotice = computed(() => {
-  if (!settings.value) return null
+  if (!settings.value || saveNeedsConfirmation.value || saveConflict.value) return null
   if (!enabled.value && !settings.value.enabled) {
     return {
       type: 'saved-disabled',
@@ -98,7 +109,7 @@ onMounted(() => {
 
 <template>
   <section
-    class="space-y-4 pb-8"
+    class="space-y-4 pb-8 min-w-0"
     data-testid="dns-view"
     :aria-label="uiText('客户端 DNS 配置', 'Client DNS Settings')"
   >
@@ -110,13 +121,11 @@ onMounted(() => {
       class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-3 min-w-0 w-full"
       data-testid="page-toolbar"
     >
-      <h1 class="sr-only">{{ uiText('客户端 DNS 配置', 'Client DNS Settings') }}</h1>
-
       <!-- Left controls: Enable toggle and mode tabs -->
       <div class="flex flex-wrap items-center gap-2 min-w-0" data-testid="toolbar-controls">
         <label
           class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-base-200/80 border border-base-300 cursor-pointer select-none transition-opacity shrink-0"
-          :class="{ 'opacity-50 pointer-events-none': busy }"
+          :class="{ 'opacity-50 pointer-events-none': busy || !settings }"
           data-testid="dns-enabled-label"
         >
           <input
@@ -124,7 +133,7 @@ onMounted(() => {
             data-testid="dns-enabled"
             type="checkbox"
             class="toggle toggle-primary toggle-sm shrink-0"
-            :disabled="busy"
+            :disabled="busy || !settings"
           />
           <span class="text-xs font-semibold whitespace-nowrap">{{ uiText('启用客户端 DNS', 'Enable Client DNS') }}</span>
         </label>
@@ -136,7 +145,7 @@ onMounted(() => {
             class="btn btn-sm join-item"
             :class="mode === 'visual' ? 'btn-primary' : 'btn-ghost'"
             data-testid="dns-visual-tab"
-            :disabled="busy"
+            :disabled="busy || !settings"
             @click="switchMode('visual')"
           >
             {{ uiText('可视配置', 'Visual Editor') }}
@@ -147,7 +156,7 @@ onMounted(() => {
             class="btn btn-sm join-item"
             :class="mode === 'raw' ? 'btn-primary' : 'btn-ghost'"
             data-testid="dns-raw-tab"
-            :disabled="busy"
+            :disabled="busy || !settings"
             @click="switchMode('raw')"
           >
             Raw YAML
@@ -168,7 +177,7 @@ onMounted(() => {
             class="badge badge-sm badge-warning font-semibold text-[11px]"
             data-testid="dns-dirty-badge"
           >
-            {{ uiText('未保存', 'Unsaved') }}
+            {{ saveNeedsConfirmation ? uiText('保存待确认', 'Save unconfirmed') : saveConflict ? uiText('版本冲突', 'Revision conflict') : uiText('未保存', 'Unsaved') }}
           </span>
           <span
             v-else
@@ -200,10 +209,10 @@ onMounted(() => {
       v-if="dnsDisabledNotice"
       role="status"
       data-testid="dns-disabled-notice"
-      class="alert bg-base-200/90 border border-base-300 text-base-content/80 shadow-xs py-2 px-3 text-xs flex items-center gap-2 rounded-xl"
+      class="alert bg-base-200/90 border border-base-300 text-base-content/80 shadow-xs py-2 px-3 text-xs flex items-start gap-2 rounded-xl"
     >
-      <InformationCircleIcon class="w-4 h-4 text-warning shrink-0" />
-      <span class="flex-1">{{ dnsDisabledNotice.text }}</span>
+      <InformationCircleIcon class="w-4 h-4 text-warning shrink-0 mt-0.5" aria-hidden="true" />
+      <span class="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{{ dnsDisabledNotice.text }}</span>
     </div>
 
     <!-- Loading / Status Alerts -->
@@ -212,29 +221,55 @@ onMounted(() => {
       <span class="text-xs font-medium">{{ uiText('正在读取 DNS 设置…', 'Loading DNS settings…') }}</span>
     </div>
 
-    <div v-if="error" role="alert" data-testid="dns-error" class="alert alert-error shadow-xs py-2 px-3">
-      <span class="text-xs font-medium flex-1">{{ displayText(error) }}</span>
+    <div v-if="error" role="alert" data-testid="dns-error" class="alert alert-error shadow-xs py-2 px-3 flex flex-col sm:flex-row items-start">
+      <span class="text-xs font-medium flex-1 min-w-0 break-words [overflow-wrap:anywhere]">{{ displayText(error) }}</span>
       <button
-        class="btn btn-sm btn-ghost border-current/30 text-xs"
+        class="btn btn-sm btn-ghost border-current/30 text-xs shrink-0"
         :disabled="busy"
-        @click="load(false)"
+        data-testid="dns-error-retry"
+        @click="saveNeedsConfirmation ? save() : load(false)"
       >
-        {{ uiText('重试 / 重载', 'Retry / Reload') }}
+        {{ saveNeedsConfirmation ? uiText('确认保存结果', 'Confirm save result') : saveConflict ? uiText('重载最新 revision', 'Reload latest revision') : uiText('重试 / 重载', 'Retry / Reload') }}
       </button>
     </div>
 
     <div v-if="notice" role="status" class="alert alert-success shadow-xs py-2 px-3">
-      <span class="text-xs font-medium">{{ notice }}</span>
+      <span class="text-xs font-medium min-w-0 break-words">{{ notice }}</span>
+    </div>
+
+    <div v-if="saveNeedsConfirmation || saveConflict" role="status" data-testid="dns-save-state" class="rounded-xl border border-warning/40 bg-warning/10 p-3 text-xs break-words">
+      {{ saveNeedsConfirmation
+        ? uiText('DNS 已写入，但回读确认尚未完成。确认保存结果只会读取服务器，不会重复写入；仍可保留或复制当前草稿。', 'DNS was written, but read-back confirmation is pending. Confirm save only reads the server; it does not write again. You can keep or copy the draft.')
+        : uiText('检测到服务器版本冲突。当前草稿与原 revision 已保留，保存已暂停；可切换 Raw YAML 复制草稿，再重新载入最新配置核对。', 'A server revision conflict was detected. Draft and original revision are preserved; saving is paused. Copy the draft in Raw YAML, then reload the latest configuration to compare.') }}
     </div>
 
     <!-- Main Configuration Card -->
     <template v-if="settings">
-      <section class="card bg-base-200/80 border border-base-300 rounded-2xl shadow-xs">
+      <section class="card min-w-0 bg-base-200/80 border border-base-300 rounded-2xl shadow-xs">
         <div class="card-body p-4 sm:p-6 space-y-6">
-          <!-- Mode 1: Visual Editor -->
-          <template v-if="mode === 'visual'">
+          <div v-if="mode === 'visual'" class="space-y-2">
+            <div class="flex items-center gap-2">
+              <input
+                v-model="fieldSearch"
+                type="search"
+                class="input input-sm w-full min-w-0"
+                data-testid="dns-field-search"
+                :aria-label="uiText('查找 DNS 字段', 'Find DNS fields')"
+                :placeholder="uiText('查找字段名称、配置键或说明…', 'Find a field by name, key, or description…')"
+              />
+              <button v-if="fieldSearch" type="button" class="btn btn-sm btn-ghost shrink-0" @click="fieldSearch = ''">
+                {{ uiText('清除', 'Clear') }}
+              </button>
+            </div>
+            <p v-if="fieldSearch.trim()" role="status" class="text-xs text-base-content/65" data-testid="dns-field-search-result">
+              {{ matchingFieldCount ? uiText('找到 ' + matchingFieldCount + ' 个字段；高级分区已展开，筛选不会修改草稿。', matchingFieldCount + ' fields found. Advanced sections are expanded; filtering does not change the draft.') : uiText('没有匹配的可视字段。可清除搜索，或在 Raw YAML 中查看全部自定义键。', 'No matching visual fields. Clear the search, or use Raw YAML to view all custom keys.') }}
+            </p>
+          </div>
+
+          <!-- Keep visual controls mounted so unsubmitted quick-entry text survives mode switches. -->
+          <div v-show="mode === 'visual'" class="space-y-6">
             <!-- Section 1: 常用核心配置 (Core Settings - Upfront & Not Folded) -->
-            <div class="space-y-3" data-testid="dns-common-section">
+            <div v-show="commonMatches" class="space-y-3" data-testid="dns-common-section">
               <div class="flex items-center justify-between pb-1.5 border-b border-base-300/60">
                 <div>
                   <h3 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-base-content/90">
@@ -246,28 +281,12 @@ onMounted(() => {
                 </div>
               </div>
 
-              <!-- Primary nameserver: full width for visibility -->
-              <DnsFieldControl
-                :field="DNS_COMMON_FIELDS[0]"
-                :draft="draft"
-                :field-error="fieldErrors[DNS_COMMON_FIELDS[0].key]"
-                :invalid-mapping-input="invalidMappingInputs[DNS_COMMON_FIELDS[0].key]"
-                :disabled="busy"
-                @update-list="setListText"
-                @add-list-item="addListItem"
-                @remove-list-item="removeListItem"
-                @paste-list-items="pasteListItems"
-                @update-scalar="setString"
-                @update-bool="setBool"
-                @update-yaml="setYamlMappingText"
-                @remove-key="removeKey"
-              />
-
-              <!-- Fallback & Bootstrap side-by-side -->
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
                 <DnsFieldControl
-                  v-for="field in DNS_COMMON_FIELDS.slice(1, 3)"
+                  v-for="field in DNS_COMMON_FIELDS"
+                  v-show="matchesDnsField(field, fieldSearch) || Boolean(fieldErrors[field.key])"
                   :key="field.key"
+                  :class="{ 'md:col-span-2': field.key === 'nameserver' || field.key === 'fake-ip-filter' }"
                   :field="field"
                   :draft="draft"
                   :field-error="fieldErrors[field.key]"
@@ -283,48 +302,10 @@ onMounted(() => {
                   @remove-key="removeKey"
                 />
               </div>
-
-              <!-- Enhanced mode, Fake-IP range, IPv6, Listen in 2-column grid -->
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <DnsFieldControl
-                  v-for="field in [DNS_COMMON_FIELDS[3], DNS_COMMON_FIELDS[4], DNS_COMMON_FIELDS[6], DNS_COMMON_FIELDS[7]]"
-                  :key="field.key"
-                  :field="field"
-                  :draft="draft"
-                  :field-error="fieldErrors[field.key]"
-                  :invalid-mapping-input="invalidMappingInputs[field.key]"
-                  :disabled="busy"
-                  @update-list="setListText"
-                  @add-list-item="addListItem"
-                  @remove-list-item="removeListItem"
-                  @paste-list-items="pasteListItems"
-                  @update-scalar="setString"
-                  @update-bool="setBool"
-                  @update-yaml="setYamlMappingText"
-                  @remove-key="removeKey"
-                />
-              </div>
-
-              <!-- Fake-IP filter list: full width -->
-              <DnsFieldControl
-                :field="DNS_COMMON_FIELDS[5]"
-                :draft="draft"
-                :field-error="fieldErrors[DNS_COMMON_FIELDS[5].key]"
-                :invalid-mapping-input="invalidMappingInputs[DNS_COMMON_FIELDS[5].key]"
-                :disabled="busy"
-                @update-list="setListText"
-                @add-list-item="addListItem"
-                @remove-list-item="removeListItem"
-                @paste-list-items="pasteListItems"
-                @update-scalar="setString"
-                @update-bool="setBool"
-                @update-yaml="setYamlMappingText"
-                @remove-key="removeKey"
-              />
             </div>
 
             <!-- Section 2: 高级与扩展配置 (Advanced Settings - YAML Mappings, Dedicated Servers, Switches) -->
-            <div class="space-y-3 pt-2" data-testid="dns-advanced-section">
+            <div v-show="advancedMatches" class="space-y-3 pt-2" data-testid="dns-advanced-section">
               <div class="flex items-center justify-between pb-1.5 border-b border-base-300/60">
                 <div>
                   <h3 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-base-content/90">
@@ -339,8 +320,10 @@ onMounted(() => {
               <div class="space-y-3">
                 <DnsGroupCard
                   v-for="group in DNS_ADVANCED_GROUPS"
+                  v-show="group.fields.some((field) => matchesDnsField(field, fieldSearch) || Boolean(fieldErrors[field.key]))"
                   :key="group.id"
                   :group="group"
+                  :search="fieldSearch"
                   :draft="draft"
                   :field-errors="fieldErrors"
                   :invalid-mapping-inputs="invalidMappingInputs"
@@ -371,7 +354,7 @@ onMounted(() => {
                   <span
                     v-for="key in unknownKeys"
                     :key="key"
-                    class="badge badge-sm badge-outline font-mono text-[10px]"
+                    class="badge badge-sm badge-outline font-mono text-[10px] h-auto whitespace-normal break-all"
                   >
                     {{ key }}
                   </span>
@@ -388,10 +371,10 @@ onMounted(() => {
                 {{ uiText('未知字段在可视模式中完整保留，保存时与当前草稿合并提交。', 'Custom keys are preserved in visual mode and merged atomically upon save.') }}
               </p>
             </div>
-          </template>
+          </div>
 
           <!-- Mode 2: Raw YAML Mode -->
-          <div v-else class="space-y-2">
+          <div v-if="mode === 'raw'" class="space-y-2">
             <div class="flex items-center justify-between">
               <div>
                 <span class="text-xs sm:text-sm font-semibold text-base-content/90">
@@ -483,11 +466,11 @@ onMounted(() => {
               <span>{{ settings.updated_at || '—' }}</span>
             </div>
 
-            <div class="flex items-center gap-2 ml-auto">
+            <div class="flex flex-wrap items-center justify-end gap-2 ml-auto w-full sm:w-auto">
               <!-- Preview YAML Button -->
               <button
                 type="button"
-                class="btn btn-sm btn-ghost border border-base-300"
+                class="btn btn-sm btn-ghost border border-base-300 flex-1 sm:flex-none"
                 data-testid="dns-preview-btn"
                 :disabled="busy || hasValidationErrors"
                 @click="preview"
@@ -500,13 +483,13 @@ onMounted(() => {
               <!-- Validate and Save Button -->
               <button
                 type="button"
-                class="btn btn-sm btn-primary"
+                class="btn btn-sm btn-primary flex-1 sm:flex-none"
                 data-testid="dns-save"
-                :disabled="busy || !dirty || hasValidationErrors"
+                :disabled="busy || saveConflict || (!saveNeedsConfirmation && (!dirty || hasValidationErrors))"
                 @click="save"
               >
                 <span v-if="saving" class="loading loading-spinner loading-xs mr-1" />
-                {{ saving ? uiText('校验并保存…', 'Validating & saving…') : uiText('校验并保存', 'Validate & Save') }}
+                {{ saving ? (saveNeedsConfirmation ? uiText('正在确认…', 'Confirming…') : uiText('校验并保存…', 'Validating & saving…')) : saveNeedsConfirmation ? uiText('确认保存结果', 'Confirm save result') : uiText('校验并保存', 'Validate & Save') }}
               </button>
             </div>
           </div>

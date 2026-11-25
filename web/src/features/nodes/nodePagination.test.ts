@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
+import { createMemoryHistory, createRouter, RouterView, type Router } from 'vue-router'
 import { api } from '../../api/client'
 import { setLocale } from '../../locales'
 import { toastStore } from '../../ui/toast'
@@ -10,11 +11,6 @@ import type { NodeRecord } from './nodeView'
 
 vi.mock('../../locales/redesign', () => ({
   uiText: (zh: string, _en: string) => zh,
-}))
-
-vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }))
 
 vi.mock('../../ui/PageToolbar.vue', () => ({
@@ -82,8 +78,9 @@ describe('speed minimum parsing', () => {
 describe('NodesView manual pagination', () => {
   let container: HTMLDivElement
   let app: ReturnType<typeof createApp> | null = null
+  let router: Router
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks()
     if (typeof globalThis.ResizeObserver === 'undefined') {
       globalThis.ResizeObserver = class {
@@ -98,6 +95,12 @@ describe('NodesView manual pagination', () => {
     sessionStorage.clear()
     toastStore.clear()
     setLocale('zh-CN')
+    router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/nodes', component: NodesView }],
+    })
+    await router.push('/nodes')
+    await router.isReady()
   })
 
   afterEach(() => {
@@ -114,11 +117,8 @@ describe('NodesView manual pagination', () => {
   })
 
   function mountView() {
-    app = createApp({
-      render() {
-        return h(NodesView)
-      },
-    })
+    app = createApp({ render: () => h(RouterView) })
+    app.use(router)
     app.mount(container)
   }
 
@@ -192,6 +192,9 @@ describe('NodesView manual pagination', () => {
     expect(container.querySelector('[data-testid="error-state-card"]')?.textContent).toContain('Fixture page two failed')
     expect(container.querySelector('[data-testid="manual-load-more-btn"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="nodes-total-badge"]')?.textContent).toContain('100 / 102')
+    expect(pageCalls).toEqual([1, 2])
+    window.dispatchEvent(new Event('scroll'))
+    await settleView()
     expect(pageCalls).toEqual([1, 2])
 
     container.querySelector<HTMLButtonElement>('[data-testid="manual-load-more-btn"]')!.click()
@@ -281,6 +284,83 @@ describe('NodesView manual pagination', () => {
     for (const key of ['protocol', 'health_status', 'ip_risk_band', 'ip_risk_score_max', 'speed_min_kib_s', 'search']) {
       expect(requests.at(-1)).not.toHaveProperty(key)
     }
+  })
+
+  it('removes each applied filter chip independently, including zero thresholds, without starting a probe', async () => {
+    const requests: Record<string, unknown>[] = []
+    const post = vi.spyOn(api, 'post').mockRejectedValue(new Error('Unexpected probe request in a filter-only fixture'))
+    vi.spyOn(api, 'get').mockImplementation(async (path: string, options?: any) => {
+      if (path === '/api/v1/nodes') {
+        requests.push({ ...options?.params })
+        return nodesPage([], 1, 0)
+      }
+      if (path === '/api/v1/probes/pool') return { probing_node_ids: [], queued_node_ids: [] }
+      return {}
+    })
+    mountView()
+    await settleView()
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="node-advanced-filters-toggle"]')!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    toggle.click()
+    await nextTick()
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    const protocol = Array.from(container.querySelectorAll<HTMLButtonElement>('[data-testid="node-protocol-filter"] button')).find((button) => button.textContent?.trim().toUpperCase() === 'SS')!
+    protocol.click()
+    container.querySelector<HTMLButtonElement>('[data-testid="node-health-pill-healthy"]')!.click()
+    for (const [id, value] of [['node-risk-band-filter', 'low'], ['node-risk-score-max', '0'], ['node-speed-min', '0']]) {
+      const input = container.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-testid="${id}"]`)!
+      input.value = value!
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      await settleView()
+    }
+    const search = container.querySelector<HTMLInputElement>('[data-testid="node-search-input"]')!
+    search.value = 'fixture missing'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await settleView()
+    const expected: Record<string, unknown> = { protocol: 'ss', health_status: 'healthy', ip_risk_band: 'low', ip_risk_score_max: '0', speed_min_kib_s: '0', search: 'fixture missing' }
+    expect(requests.at(-1)).toMatchObject(expected)
+    const chipButtons = () => Array.from(container.querySelectorAll<HTMLButtonElement>('[data-testid="node-active-filter-chips"] button[aria-label]'))
+    expect(chipButtons()).toHaveLength(6)
+    // Applied advanced filters remain visible as chips when the advanced controls are collapsed.
+    toggle.click()
+    await nextTick()
+    for (const [label, key] of [['风险分数', 'ip_risk_score_max'], ['≥ 0 KiB/s', 'speed_min_kib_s'], ['搜索', 'search'], ['IP 风险', 'ip_risk_band'], ['状态', 'health_status'], ['协议', 'protocol']]) {
+      const chip = chipButtons().find((button) => button.textContent?.includes(label!))!
+      chip.click()
+      await settleView()
+      delete expected[key!]
+      expect(requests.at(-1)).toMatchObject({ ...expected, page: 1, scope: 'enabled_subscriptions' })
+      expect(requests.at(-1)).not.toHaveProperty(key!)
+      expect(chipButtons().some((button) => button.textContent?.includes(label!))).toBe(false)
+    }
+    expect(chipButtons()).toHaveLength(0)
+    expect(search.value).toBe('')
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('does not register polling or listeners if the page unmounts before its first list request completes', async () => {
+    const page = deferred<ReturnType<typeof nodesPage>>()
+    vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+      if (path === '/api/v1/nodes') return page.promise
+      if (path === '/api/v1/probes/pool') return { probing_node_ids: ['fixture-node-1'], queued_node_ids: [] }
+      return {}
+    })
+    const intervals = vi.spyOn(globalThis, 'setInterval')
+    const listeners = vi.spyOn(document, 'addEventListener')
+    const initialIntervalCount = intervals.mock.calls.length
+    const initialVisibilityListenerCount = listeners.mock.calls.filter(([event]) => event === 'visibilitychange').length
+    mountView()
+    await nextTick()
+    expect(intervals).toHaveBeenCalledTimes(initialIntervalCount)
+    expect(listeners.mock.calls.filter(([event]) => event === 'visibilitychange')).toHaveLength(initialVisibilityListenerCount)
+    app!.unmount()
+    app = null
+    page.resolve(nodesPage(pageOneNodes.slice(0, 1), 1, 1))
+    await settleView()
+    expect(intervals).toHaveBeenCalledTimes(initialIntervalCount)
+    expect(listeners.mock.calls.filter(([event]) => event === 'visibilitychange')).toHaveLength(initialVisibilityListenerCount)
   })
 
   it('keeps a cleared filter on page one when an older speed-filtered page two arrives', async () => {

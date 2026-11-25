@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
-import { createRouter, createMemoryHistory } from 'vue-router'
+import { createRouter, createMemoryHistory, RouterView } from 'vue-router'
+import { setImmediate } from 'node:timers'
 import NodesView from './NodesView.vue'
 import NodeSourceHistoryPanel from './NodeSourceHistoryPanel.vue'
 import { api, ApiError } from '../../api/client'
@@ -511,8 +512,10 @@ describe('Node Source Attribution & History Specification', () => {
       app.mount(mountEl)
       await nextTick()
 
-      // No input controls, checkboxes, selects, or mutation buttons
-      expect(mountEl.querySelectorAll('input').length).toBe(0)
+      // Source search is local-only; no controls may mutate attribution or subscription state
+      expect(mountEl.querySelectorAll('input')).toHaveLength(1)
+      expect(mountEl.querySelector('input')?.type).toBe('search')
+      expect(mountEl.querySelector('input')?.dataset.testid).toBe('source-history-search')
       expect(mountEl.querySelectorAll('select').length).toBe(0)
       expect(mountEl.querySelectorAll('textarea').length).toBe(0)
       expect(mountEl.querySelectorAll('.toggle, .checkbox').length).toBe(0)
@@ -705,6 +708,115 @@ describe('Node Source Attribution & History Specification', () => {
 
       app.unmount()
       mountEl.remove()
+    })
+
+    it('protects dirty drafts across route leave and node deep-link changes', async () => {
+      vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+      const records: Record<string, NodeRecord> = {
+        'node-guard-a': { logical_id: 'node-guard-a', protocol: 'ss', display_name: 'Guard A', active: true, server: 'a.example', port: 443, credentials: { method: 'aes-128-gcm', password: 'fixture' } },
+        'node-guard-b': { logical_id: 'node-guard-b', protocol: 'ss', display_name: 'Guard B', active: true, server: 'b.example', port: 443, credentials: { method: 'aes-128-gcm', password: 'fixture' } },
+      }
+      vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+        if (path === '/api/v1/nodes') return { items: Object.values(records), total: 2, page: 1, page_size: 100 }
+        if (path === '/api/v1/probes/pool') return { probing_node_ids: [], queued_node_ids: [] }
+        const match = /^\/api\/v1\/nodes\/(node-guard-[ab])$/.exec(path)
+        if (match) return { node: records[match[1]!] }
+        if (/^\/api\/v1\/nodes\/node-guard-[ab]\/source-history$/.test(path)) return { attribution_status: 'unknown', current_sources: [], history: [] }
+        return {}
+      })
+      const router = createRouter({
+        history: createMemoryHistory(),
+        routes: [{ path: '/nodes', component: NodesView }, { path: '/other', component: { template: '<div>Other</div>' } }],
+      })
+      await router.push('/nodes?node=node-guard-a')
+      const host = document.createElement('div')
+      document.body.appendChild(host)
+      const app = createApp({ render: () => h(RouterView) })
+      app.use(router)
+      app.mount(host)
+      try {
+      await router.isReady()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      const serverInput = () => document.body.querySelector<HTMLInputElement>('[data-testid="node-server-input"]')!
+      expect(serverInput().value).toBe('a.example')
+      serverInput().value = 'draft.example'
+      serverInput().dispatchEvent(new Event('input', { bubbles: true }))
+      await nextTick()
+
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      await router.push('/nodes?node=node-guard-b')
+      await nextTick()
+      expect(router.currentRoute.value.query.node).toBe('node-guard-a')
+      expect(document.body.querySelector('[data-testid="node-detail-drawer"]')?.textContent).toContain('Guard A')
+      expect(serverInput().value).toBe('draft.example')
+      expect(confirm).toHaveBeenCalledOnce()
+
+      confirm.mockReturnValueOnce(true)
+      await router.push('/nodes?node=node-guard-b')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(router.currentRoute.value.query.node).toBe('node-guard-b')
+      expect(serverInput().value).toBe('b.example')
+      expect(confirm).toHaveBeenCalledTimes(2)
+      expect(document.body.querySelector('[data-testid="node-detail-drawer"]')?.textContent).toContain('Guard B')
+
+      serverInput().value = 'second-draft.example'
+      serverInput().dispatchEvent(new Event('input', { bubbles: true }))
+      await nextTick()
+      let rejectSave!: (error: Error) => void
+      const pendingSave = new Promise<never>((_, reject) => { rejectSave = reject })
+      vi.spyOn(api, 'patch').mockImplementation(() => pendingSave)
+      document.body.querySelector('[data-testid="node-detail-drawer"] form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await nextTick()
+      await router.push('/nodes?node=node-guard-a')
+      expect(router.currentRoute.value.query.node).toBe('node-guard-b')
+      await router.push('/other')
+      expect(router.currentRoute.value.path).toBe('/nodes')
+      expect(confirm).toHaveBeenCalledTimes(2)
+      rejectSave(new Error('Fixture save failed'))
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(serverInput().value).toBe('second-draft.example')
+      expect(document.body.querySelector('[data-testid="node-connection-error"]')?.textContent).toContain('Fixture save failed')
+      confirm.mockReturnValue(false)
+      await router.push('/other')
+      await nextTick()
+      expect(router.currentRoute.value.path).toBe('/nodes')
+      expect(serverInput().value).toBe('second-draft.example')
+      expect(confirm).toHaveBeenCalledTimes(3)
+      const unload = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(unload)
+      expect(unload.defaultPrevented).toBe(true)
+
+      await router.push('/nodes')
+      expect(router.currentRoute.value.query.node).toBe('node-guard-b')
+      expect(serverInput().value).toBe('second-draft.example')
+      expect(confirm).toHaveBeenCalledTimes(4)
+      confirm.mockReturnValueOnce(true)
+      await router.push('/nodes')
+      await nextTick()
+      expect(router.currentRoute.value.query.node).toBeUndefined()
+      expect(confirm).toHaveBeenCalledTimes(5)
+      expect(document.body.querySelector('[data-testid="node-discard-draft-modal"]')).toBeNull()
+
+      await router.push('/nodes?node=node-guard-a')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      serverInput().value = 'last-draft.example'
+      serverInput().dispatchEvent(new Event('input', { bubbles: true }))
+      await nextTick()
+      confirm.mockReturnValueOnce(true)
+      await router.push('/other')
+      await nextTick()
+      expect(router.currentRoute.value.path).toBe('/other')
+      expect(confirm).toHaveBeenCalledTimes(6)
+      expect(host.textContent).toContain('Other')
+      const cleanUnload = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(cleanUnload)
+      expect(cleanUnload.defaultPrevented).toBe(false)
+
+      } finally {
+        app.unmount()
+        host.remove()
+        vi.unstubAllGlobals()
+      }
     })
 
     it('switching query node triggers stable watch and loads new node detail and history', async () => {

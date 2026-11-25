@@ -773,7 +773,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       app.mount(mountEl)
       await nextTick()
 
-      const text = mountEl.textContent || ''
+      const text = document.body.querySelector('[data-testid="probe-evidence-sheet"]')?.textContent || ''
       expect(text).toContain('旧版探测结果，需重新检测')
       expect(text).toContain('Claude (US)')
       expect(text).toContain('8.0 MB/s')

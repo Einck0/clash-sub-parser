@@ -218,32 +218,14 @@ npm run dev
 
 ---
 
-## 智能体自动化运维与 API 技能 (Agent Operations & Skills)
+## 管理 API 与自动化运维
 
-为了让外部智能体（Hermes Agent、Pi 多智能体集群等）或自动化脚本能够在**无需修改源码、无需重新构建容器**的前提下便捷地调用与操作 CSP 1.0，我们在仓库中提供了专用的智能体技能目录：[`skills/csp-ops/`](skills/csp-ops/SKILL.md)。
+自动化应使用当前 `/api/v1/*` 管理 API，并保留认证、CSRF、行修订与配置版本冲突保护。接口语义见 [API semantic matrix](docs/api_semantic_matrix.md)，运行与交付入口见 [Operations](docs/operations.md) 和 [云端交付说明](docs/operations/csp-cloud-delivery.md)。旧开发现场中的 `csp_ctl.py` 技能副本不属于当前发行物，不再作为安装或运维前提。
 
-### 内置运维工具 CLI (`csp_ctl.py`)
-位于 `skills/csp-ops/scripts/csp_ctl.py`，采用 Python 3 原生标准库编写（零外部依赖），提供开箱即用的命令行工具与 Python SDK：
+### 工作流与数据反馈
 
-```bash
-# 1. 查看集群全貌与健康状态（节点数、策略组数、470 条规则、订阅状态与诊断）
-python3 skills/csp-ops/scripts/csp_ctl.py status
-
-# 2. 分流规则管理（模糊分类与目标组解析）
-python3 skills/csp-ops/scripts/csp_ctl.py rule list --limit 100
-python3 skills/csp-ops/scripts/csp_ctl.py rule list --search "openai"
-python3 skills/csp-ops/scripts/csp_ctl.py rule add --expression "DOMAIN-SUFFIX,anthropic.com" --target "AI" --category "AI"
-python3 skills/csp-ops/scripts/csp_ctl.py rule delete --id "<rule-uuid>"
-
-# 3. 策略组管线编排与空节点兜底控制
-python3 skills/csp-ops/scripts/csp_ctl.py group list
-python3 skills/csp-ops/scripts/csp_ctl.py group get "选择节点"
-python3 skills/csp-ops/scripts/csp_ctl.py group add-source "选择节点" --kind filter --filter-display-not-regex "自动|故障|官网|套餐|机场|订阅"
-python3 skills/csp-ops/scripts/csp_ctl.py group set-empty-pass "加拿大" --enable
-
-# 4. 订阅同步管理
-python3 skills/csp-ops/scripts/csp_ctl.py sub list
-python3 skills/csp-ops/scripts/csp_ctl.py sub refresh --all
-```
-
-完整规范、Python SDK 导入范例与全量 RESTful API 契约详见：[skills/csp-ops/SKILL.md](skills/csp-ops/SKILL.md)。
+- **草稿与保存**：订阅、节点连接、策略、规则、DNS、链和服务器设置区分未保存、保存中、已确认与读取失败；冲突不静默覆盖草稿。已确认写入但后续读取失败时，按提示重试读取，不重复创建。
+- **检测证据**：普通检测、单节点手动带宽测速和历史记录分开；排队、运行、失败、取消不表示“测速完成”。证据仓储读取失败是可重试错误，不等于正常的 unknown；真正没有观测仍显示未知。
+- **测速筛选**：最低 KiB/s 仅筛选当前连接已保存的有效测速。留空不限制，填 0 仍要求有效正吞吐；浏览、筛选不会启动测速。
+- **客户端订阅**：实时直链消费当前保存的库存与配置；预览下载和冻结发布绑定同一快照。排除清单可按安全名称或原因查找；旧记录或不能安全命名的项目回退到经校验、限长的节点 ID；ID 也不适合显示时标注“名称不可用”。公开导出头不增加管理显示名。
+- **设置与导航**：五类设置可直接定位，服务器配置与仅在浏览器保存的主题/语言保持分离。DNS 的 Raw/Visual 编辑保留未识别键；链式代理区分候选未确认、缓存和确实失效的引用。

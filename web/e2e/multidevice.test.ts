@@ -405,13 +405,13 @@ describe('CSP Multi-Device & E2E Verification Suite', () => {
       expect(healthDot).not.toBeNull()
       const healthText = healthIndicator?.querySelector('span.hidden.sm\\:inline')
       expect(healthText).not.toBeNull()
-      expect(healthText?.textContent?.toLowerCase()).toContain('healthy')
+      expect(healthText?.textContent?.toLowerCase()).toContain('service online')
 
       const refreshBtn = healthIndicator?.querySelector('button[aria-label="Refresh health"]')
       expect(refreshBtn).not.toBeNull()
 
       // 4. Theme toggle button with aria-label
-      const themeBtn = root.querySelector('header button[aria-label="Toggle Theme"]')
+      const themeBtn = root.querySelector('header button[data-testid="theme-toggle"]')
       expect(themeBtn).not.toBeNull()
 
       // 5. Title container min-w-0 and truncate

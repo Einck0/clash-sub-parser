@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, h, nextTick } from 'vue'
+import { createApp, h, nextTick, type Component } from 'vue'
 import GlobalNodeFilterSettings from './GlobalNodeFilterSettings.vue'
 import { api, ApiError } from '../../api/client'
 import { setLocale } from '../../locales'
@@ -21,7 +21,7 @@ describe('global export filter settings', () => {
     element.value = value
     element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
   }
-  const mount = (view = GlobalNodeFilterSettings) => {
+  const mount = (view: Component = GlobalNodeFilterSettings) => {
     app = createApp({ render: () => h(view) })
     app.mount(root)
   }

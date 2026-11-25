@@ -89,11 +89,11 @@ describe('connection draft isolation', () => {
   it('translates protocol editor options and placeholders but preserves field IDs', async () => {
     const { node } = mountEditor()
     setLocale('en-US')
-    node.value = normalizeNode({ logical_id: 'wg', protocol: 'wireguard', active: true, server: 'wg.example', port: 51820 })
+    node.value = normalizeNode({ logical_id: 'wg', display_name: 'WG fixture', protocol: 'wireguard', active: true, server: 'wg.example', port: 51820 })
     await nextTick()
     expect(host.textContent).toContain('WireGuard endpoint and peer configuration')
     expect(host.querySelector<HTMLInputElement>('[data-testid="wg-public-key-input"]')?.placeholder).toBe('Base64 peer public key')
-    node.value = normalizeNode({ logical_id: 'tuic', protocol: 'tuic', active: true, server: 'tuic.example', port: 443 })
+    node.value = normalizeNode({ logical_id: 'tuic', display_name: 'TUIC fixture', protocol: 'tuic', active: true, server: 'tuic.example', port: 443 })
     await nextTick()
     expect(host.textContent).toContain('TUIC v5 connection and QUIC transport parameters')
     expect(host.querySelector('option')?.textContent).toBe('(Default / not set)')
@@ -104,7 +104,7 @@ describe('connection draft isolation', () => {
   })
 
   it('localizes node diagnostics, validation and attribution at call time', () => {
-    const node = normalizeNode({ logical_id: 'diag', protocol: 'ss', active: true, capabilities: { baseline: { verdict: 'error', summary: 'reason=private_target_rejected' }, ip_risk: { verdict: 'available', risk_score: '25' } } })
+    const node = normalizeNode({ logical_id: 'diag', display_name: 'Diagnostic fixture', protocol: 'ss', active: true, capabilities: { baseline: { verdict: 'error', summary: 'reason=private_target_rejected' }, ip_risk: { verdict: 'available', risk_score: '25' } } })
     expect(attributionStatusBadge('historical_verified').label).toBe('历史已核验归属')
     expect(validateNodeConnectionProfile('ss', {})).toBe('服务器地址不能为空')
     setLocale('en-US')

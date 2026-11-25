@@ -817,13 +817,13 @@ func (c *PeriodicCoordinator) executeBatch(parentCtx context.Context, batch *dom
 				obsAge = 0
 			}
 
-			// Cooldown on failure: don't retry failed/error probes before cooldown expires
+			revisionMismatch := n.ConnectionRevision > 0 && (obs.ConnectionRevision == nil || *obs.ConnectionRevision != n.ConnectionRevision)
+			// A previous connection's failure must not delay probing the current revision.
 			isFailure := obs.Verdict == domain.VerdictError || obs.Verdict == domain.VerdictUnknown
-			if isFailure && obsAge < cooldown {
+			if !revisionMismatch && isFailure && obsAge < cooldown {
 				continue
 			}
 
-			revisionMismatch := n.ConnectionRevision > 0 && (obs.ConnectionRevision == nil || *obs.ConnectionRevision != n.ConnectionRevision)
 			if revisionMismatch || obsAge >= nodeInterval {
 				expiredKinds = append(expiredKinds, k)
 				if revisionMismatch {

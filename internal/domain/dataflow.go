@@ -107,10 +107,13 @@ type ManifestIncludedNode struct {
 }
 
 // ManifestExcludedNode tracks an excluded node and its diagnostic exclusion reason.
+// DisplayName is optional, sanitized snapshot metadata for management views;
+// public export headers deliberately omit it.
 type ManifestExcludedNode struct {
-	NodeID string `json:"node_id"`
-	Code   string `json:"code"`
-	Reason string `json:"reason"`
+	NodeID      string `json:"node_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Code        string `json:"code"`
+	Reason      string `json:"reason"`
 }
 
 // NodeConnectionVersion holds an immutable, revisioned snapshot of a node's connection parameters.

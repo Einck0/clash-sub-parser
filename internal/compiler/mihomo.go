@@ -544,6 +544,70 @@ func parsePluginHeaders(loc, plugin string, val any) (map[string]string, error) 
 	}
 }
 
+// parsePluginOptionMap is the single syntax/normalization boundary shared by
+// the renderer and secret collection. It preserves exact JSON numbers and the
+// renderer's delimiter, paired-quote, composite and duplicate-key semantics.
+func parsePluginOptionMap(loc, rawOpts string) (map[string]any, error) {
+	rawMap := make(map[string]any)
+	if rawOpts != "" {
+		trimmedOpts := strings.TrimSpace(rawOpts)
+		if strings.HasPrefix(trimmedOpts, "{") || strings.HasPrefix(trimmedOpts, "[") {
+			if !json.Valid([]byte(trimmedOpts)) {
+				return nil, mihomoError(loc, "ss", "invalid JSON syntax in shadowsocks plugin-opts")
+			}
+			parsed, err := unmarshalJSONMap(trimmedOpts)
+			if err != nil || parsed == nil {
+				return nil, mihomoError(loc, "ss", "invalid JSON object in shadowsocks plugin-opts")
+			}
+			rawMap = parsed
+		} else {
+			delimiter := ";"
+			if !strings.Contains(trimmedOpts, ";") && strings.Contains(trimmedOpts, "&") {
+				delimiter = "&"
+			}
+			tokens := strings.Split(trimmedOpts, delimiter)
+			for _, token := range tokens {
+				token = strings.TrimSpace(token)
+				if token == "" {
+					continue
+				}
+				if strings.Contains(token, "=") {
+					parts := strings.SplitN(token, "=", 2)
+					k := strings.TrimSpace(parts[0])
+					v := strings.TrimSpace(parts[1])
+					if k == "" {
+						return nil, mihomoError(loc, "ss", "invalid empty key in shadowsocks plugin-opts entry")
+					}
+					if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
+						v = v[1 : len(v)-1]
+					}
+					var value any = v
+					if strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[") {
+						if !json.Valid([]byte(v)) {
+							return nil, mihomoError(loc, "ss", "invalid JSON syntax in shadowsocks plugin-opts value")
+						}
+						d := json.NewDecoder(strings.NewReader(v))
+						d.UseNumber()
+						if err := d.Decode(&value); err != nil {
+							return nil, mihomoError(loc, "ss", "invalid JSON syntax in shadowsocks plugin-opts value")
+						}
+					}
+					if previous, exists := rawMap[k]; exists && !reflect.DeepEqual(previous, value) {
+						return nil, mihomoError(loc, "ss", "conflicting options in shadowsocks plugin-opts")
+					}
+					rawMap[k] = value
+				} else {
+					if previous, exists := rawMap[token]; exists && !reflect.DeepEqual(previous, "true") {
+						return nil, mihomoError(loc, "ss", "conflicting options in shadowsocks plugin-opts")
+					}
+					rawMap[token] = "true"
+				}
+			}
+		}
+	}
+	return rawMap, nil
+}
+
 func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string, map[string]any, error) {
 	hasOpts1 := c.Transport != nil && strings.TrimSpace(c.Transport["plugin-opts"]) != ""
 	hasOpts2 := c.Transport != nil && strings.TrimSpace(c.Transport["plugin_opts"]) != ""
@@ -584,64 +648,9 @@ func parseMihomoSSPlugin(loc string, c domain.InboundProtocolCredential) (string
 		return "", nil, mihomoError(loc, "ss", "unsupported shadowsocks plugin for mihomo")
 	}
 
-	rawMap := make(map[string]any)
-	if rawOpts != "" {
-		trimmedOpts := strings.TrimSpace(rawOpts)
-		if strings.HasPrefix(trimmedOpts, "{") || strings.HasPrefix(trimmedOpts, "[") {
-			// Validate the entire value, including trailing data, before decoding.
-			// Decoder errors and raw tokens can contain subscription secrets.
-			if !json.Valid([]byte(trimmedOpts)) {
-				return "", nil, mihomoError(loc, "ss", "invalid JSON syntax in shadowsocks plugin-opts")
-			}
-			parsed, err := unmarshalJSONMap(trimmedOpts)
-			if err != nil || parsed == nil {
-				return "", nil, mihomoError(loc, "ss", "invalid JSON object in shadowsocks plugin-opts")
-			}
-			rawMap = parsed
-		} else {
-			delimiter := ";"
-			if !strings.Contains(trimmedOpts, ";") && strings.Contains(trimmedOpts, "&") {
-				delimiter = "&"
-			}
-			tokens := strings.Split(trimmedOpts, delimiter)
-			for _, token := range tokens {
-				token = strings.TrimSpace(token)
-				if token == "" {
-					continue
-				}
-				if strings.Contains(token, "=") {
-					parts := strings.SplitN(token, "=", 2)
-					k := strings.TrimSpace(parts[0])
-					v := strings.TrimSpace(parts[1])
-					if k == "" {
-						return "", nil, mihomoError(loc, "ss", "invalid empty key in shadowsocks plugin-opts entry")
-					}
-					if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
-						v = v[1 : len(v)-1]
-					}
-					var value any = v
-					if strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[") {
-						if !json.Valid([]byte(v)) {
-							return "", nil, mihomoError(loc, "ss", "invalid JSON syntax in shadowsocks plugin-opts value")
-						}
-						d := json.NewDecoder(strings.NewReader(v))
-						d.UseNumber()
-						if err := d.Decode(&value); err != nil {
-							return "", nil, mihomoError(loc, "ss", "invalid JSON syntax in shadowsocks plugin-opts value")
-						}
-					}
-					if previous, exists := rawMap[k]; exists && !reflect.DeepEqual(previous, value) {
-						return "", nil, mihomoError(loc, "ss", "conflicting options in shadowsocks plugin-opts")
-					}
-					rawMap[k] = value
-				} else {
-					if previous, exists := rawMap[token]; exists && !reflect.DeepEqual(previous, "true") {
-						return "", nil, mihomoError(loc, "ss", "conflicting options in shadowsocks plugin-opts")
-					}
-					rawMap[token] = "true"
-				}
-			}
-		}
+	rawMap, err := parsePluginOptionMap(loc, rawOpts)
+	if err != nil {
+		return "", nil, err
 	}
 
 	// Stable ordering makes the first failure deterministic even when several

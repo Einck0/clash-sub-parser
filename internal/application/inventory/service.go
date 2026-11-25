@@ -1559,16 +1559,12 @@ func (s *Service) GetNodeDetailWithRisk(ctx context.Context, logicalID string, p
 		return nil, err
 	}
 	views := []NodeView{ToNodeViewFromReadModel(*rm)}
-	_ = s.enrichNodeViews(ctx, views, time.Time{})
+	if err := s.enrichNodeViews(ctx, views, time.Time{}); err != nil {
+		return nil, nodeEvidenceUnavailableError()
+	}
 	view := views[0]
 
 	sources := view.Sources
-	if len(sources) == 0 && s.sources != nil {
-		if byNode, listErr := s.sources.ListByNode(ctx, logicalID); listErr == nil && byNode != nil {
-			sources = byNode
-			view.Sources = sources
-		}
-	}
 	if sources == nil {
 		sources = make([]domain.NodeSource, 0)
 	}
@@ -1636,7 +1632,14 @@ func (s *Service) ListNodesReadModel(ctx context.Context, filter domain.NodeFilt
 			}
 		}
 	}
+	if err != nil {
+		return nil, 0, nodeEvidenceUnavailableError()
+	}
 	return views, total, nil
+}
+
+func nodeEvidenceUnavailableError() error {
+	return domain.NewInternalError("node_evidence_unavailable", "Unable to read node evidence; refresh and try again")
 }
 
 func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView, asOf time.Time) error {
@@ -1658,28 +1661,29 @@ func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView, asOf ti
 	}
 
 	if s.sources != nil {
-		if sourcesByNode, err := s.sources.ListByNodes(ctx, nodeIDs); err == nil {
-			for i := range views {
-				if srcs, ok := sourcesByNode[views[i].LogicalID]; ok && srcs != nil {
-					views[i].Sources = srcs
-				} else {
-					views[i].Sources = make([]domain.NodeSource, 0)
-				}
+		sourcesByNode, err := s.sources.ListByNodes(ctx, nodeIDs)
+		if err != nil {
+			return err
+		}
+		for i := range views {
+			if srcs, ok := sourcesByNode[views[i].LogicalID]; ok && srcs != nil {
+				views[i].Sources = srcs
+			} else {
+				views[i].Sources = make([]domain.NodeSource, 0)
 			}
 		}
 	}
 
-	var obsErr error
 	if s.probeObsRepo != nil {
 		latestByNode, err := s.probeObsRepo.ListLatestByNodes(ctx, nodeIDs, nil)
-		obsErr = err
-		if err == nil {
-			if asOf.IsZero() {
-				asOf = s.now()
-			}
-			for i := range views {
-				applyProbeObservationsToView(&views[i], latestByNode[views[i].LogicalID], asOf)
-			}
+		if err != nil {
+			return err
+		}
+		if asOf.IsZero() {
+			asOf = s.now()
+		}
+		for i := range views {
+			applyProbeObservationsToView(&views[i], latestByNode[views[i].LogicalID], asOf)
 		}
 	}
 
@@ -1699,7 +1703,7 @@ func (s *Service) enrichNodeViews(ctx context.Context, views []NodeView, asOf ti
 			}
 		}
 	}
-	return obsErr
+	return nil
 }
 
 func verdictToHealthStatus(verdict domain.ProbeVerdict) string {

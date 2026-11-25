@@ -201,10 +201,24 @@ schema: speckit-native
 
 系统 SHALL 提供节点列表读取，接受 `page`、`page_size`、固定排序和已声明的协议、国家、连通性、延迟与能力筛选器。响应 MUST 返回 `items`、`page`、`page_size`、`total` 与用于详情读取的节点 `logical_id`；服务端 MUST 在筛选后分页。
 
+普通节点列表及详情读取所需的来源或探测证据查询实际失败时，系统 MUST 返回 HTTP 500 的标准 typed error envelope，`code=node_evidence_unavailable`，安全消息为 `Unable to read node evidence; refresh and try again`，并保留现有 `request_id`。响应 MUST NOT 泄露底层 SQL、原始错误或凭据，也不得返回部分成功分页/详情，或以 HTTP 200 的 `unknown`、空来源伪装读取成功。查询成功但确实无来源/观测数据时，仍按既有语义返回成功响应、空来源及相应 `unknown`/`missing`，不改变健康判定。
+
+证据批读 MUST 保持现有分页范围，仅查询当前页节点；空页不额外查询全库证据。`speed_min` 路径保留独立的 HTTP 500 `speed_evidence_unavailable` 与 HTTP 409 `speed_evidence_changed`，不改变既有测速筛选与证据一致性合同。
+
 ##### Scenario: 万级节点的筛选分页 <a id="scenario-inv-hr-053-1"></a>
 - **GIVEN** 订阅源与节点资产处于有效配置状态
 - **WHEN** 调用者以有效筛选条件请求某一页节点
 - **THEN** 返回项数不超过 `page_size`，`total` 表示同一筛选集合总数，且客户端无需下载完整台账
+
+##### Scenario: 来源或探测证据读取失败 <a id="scenario-inv-hr-053-2"></a>
+- **GIVEN** 普通节点列表或详情需要读取来源与探测证据
+- **WHEN** 任一所需证据查询实际失败
+- **THEN** 返回安全的 HTTP 500 `node_evidence_unavailable` 及 `request_id`，不返回部分成功数据，也不将失败显示为正常无数据
+
+##### Scenario: 真实无证据与空页 <a id="scenario-inv-hr-053-3"></a>
+- **GIVEN** 节点和所需证据查询均成功
+- **WHEN** 当前页节点或详情确实没有来源/探测记录，或所请求分页为空
+- **THEN** 无证据节点仍返回成功响应并保留既有空来源与 `unknown`/`missing` 语义；批读不超出当前页节点范围，空页不执行额外证据查询
 
 #### Requirement: 不可变发布快照与发布证据保护 [HR-072] <a id="req-inv-hr-072"></a>
 

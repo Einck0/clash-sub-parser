@@ -19,7 +19,7 @@ func TestPublicationManifestRoundTripAndActivation(t *testing.T) {
 		NodeCount: 1, ExcludedCount: 1,
 		PayloadIDs: []string{"origin-1"}, ConfigurationRevision: "revision-1", RulesDigest: "rules-digest",
 		Included:            []domain.ManifestIncludedNode{{NodeID: "compatible-node", ConnectionRevision: 3}},
-		Excluded:            []domain.ManifestExcludedNode{{NodeID: "incompatible-node", Code: "unsupported_target_capability", Reason: "Mihomo does not support this transport parameter"}},
+		Excluded:            []domain.ManifestExcludedNode{{NodeID: "incompatible-node", DisplayName: "Legacy node · 香港", Code: "unsupported_target_capability", Reason: "Mihomo does not support this transport parameter"}},
 		TargetEngineVersion: "1.0.0", MappingVersion: "1.0.0",
 	}
 	pub := &domain.Publication{

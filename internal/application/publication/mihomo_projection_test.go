@@ -57,7 +57,7 @@ func TestMihomoProjectionPreviewLiveSaveAndPublicExportAgree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(projected.Nodes) != 1 || len(live.ExcludedNodes) != 1 || live.ExcludedNodes[0].NodeID != facts.Nodes[1].LogicalID {
+	if len(projected.Nodes) != 1 || len(live.ExcludedNodes) != 1 || live.ExcludedNodes[0].NodeID != facts.Nodes[1].LogicalID || live.ExcludedNodes[0].DisplayName != "Legacy" {
 		t.Fatalf("wrong projection: %+v %+v", projected.Nodes, live.ExcludedNodes)
 	}
 	if !strings.Contains(string(live.Content), "empty-fallback: PASS") || !strings.Contains(string(live.Content), "- PASS") || strings.Contains(string(live.Content), "Legacy") {
@@ -89,6 +89,8 @@ func TestMihomoProjectionPreviewLiveSaveAndPublicExportAgree(t *testing.T) {
 	if err != nil || draft.Manifest == nil || !reflect.DeepEqual(*draft.Manifest, preview.Manifest) {
 		t.Fatalf("manifest not frozen: %+v %v", draft, err)
 	}
+	// Later inventory labels must not rewrite the already frozen preview identity.
+	facts.Nodes[1].DisplayName = "Renamed after preview"
 	published, err := svc.Publish(ctx, publication.PublishCommand{Target: domain.TargetMihomo, SnapshotID: preview.SnapshotID})
 	if err != nil {
 		t.Fatal(err)

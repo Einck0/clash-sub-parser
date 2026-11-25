@@ -58,6 +58,7 @@ func setSafeManifestHeaders(w http.ResponseWriter, manifest *domain.PublicationM
 		if nodeTrunc || codeTrunc || reasonTrunc {
 			truncated = true
 		}
+		// Management-only display names must not enter public subscription headers.
 		excluded = append(excluded, domain.ManifestExcludedNode{
 			NodeID: nodeID,
 			Code:   code,

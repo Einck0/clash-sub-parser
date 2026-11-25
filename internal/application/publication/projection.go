@@ -2,6 +2,8 @@ package publication
 
 import (
 	"fmt"
+	"strings"
+	"unicode"
 
 	"clash-sub-parser/internal/compiler"
 	"clash-sub-parser/internal/domain"
@@ -20,6 +22,17 @@ func projectExportSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target dom
 		return snapshot, nil, domain.NewValidationError("filtered_nodes_empty", "no exportable nodes remain and no routed PASS fallback is configured")
 	}
 	projected, excluded := compiler.FilterCompatibleSnapshot(snapshot, target)
+	// Resolve labels from the same pre-projection snapshot, including nodes
+	// excluded through dialer dependencies. Never consult today's inventory.
+	excludedByID := make(map[string]int, len(excluded))
+	for i := range excluded {
+		excludedByID[excluded[i].NodeID] = i
+	}
+	for _, node := range snapshot.Nodes {
+		if i, ok := excludedByID[node.LogicalID]; ok {
+			excluded[i].DisplayName = safeExcludedDisplayName(node)
+		}
+	}
 	for _, node := range excluded {
 		projected.Diagnostics = append(projected.Diagnostics, resolver.Diagnostic{
 			Severity: resolver.DiagnosticSeverityWarning,
@@ -43,6 +56,37 @@ func projectExportSnapshot(snapshot *resolver.ResolvedPolicySnapshot, target dom
 		return projected, excluded, err
 	}
 	return projected, excluded, nil
+}
+
+// Omit credential-like labels rather than risk turning a diagnostic into a
+// connection URL or credential viewer. The node ID remains a stable fallback.
+func safeExcludedDisplayName(node resolver.ResolvedNode) string {
+	name := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			return -1
+		}
+		return r
+	}, node.DisplayName)
+	if strings.Contains(name, "://") {
+		return ""
+	}
+	// Share the compiler's collector, including nested plugin options. Checking
+	// only outer transport keys would freeze bare inner secrets as node names.
+	secrets, complete := compiler.CollectCredentialSecrets(node.Credentials)
+	if !complete {
+		return ""
+	}
+	for _, secret := range secrets {
+		if strings.Contains(strings.ToLower(name), strings.ToLower(secret)) {
+			return ""
+		}
+	}
+	name = domain.RedactSensitiveInfo(name)
+	runes := []rune(name)
+	if len(runes) > 128 {
+		name = string(runes[:127]) + "…"
+	}
+	return name
 }
 
 func projectionWarnings(snapshot *resolver.ResolvedPolicySnapshot) []PreflightDiagnostic {

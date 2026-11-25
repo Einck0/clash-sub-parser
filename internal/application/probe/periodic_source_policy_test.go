@@ -443,6 +443,88 @@ func TestPeriodicCoordinator_ConnectionRevisionMismatch_TriggersImmediate(t *tes
 	}
 }
 
+func TestPeriodicCoordinator_FailureCooldownFollowsConnectionRevision(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	currentRev, oldRev := int64(2), int64(1)
+	cases := []struct {
+		name             string
+		nodeRevision     int64
+		observedRevision *int64
+		observationAge   time.Duration
+		wantRuns         int
+	}{
+		{"same_revision_in_cooldown", currentRev, &currentRev, time.Minute, 0},
+		{"old_revision_in_cooldown", currentRev, &oldRev, time.Minute, 1},
+		{"missing_revision_in_cooldown", currentRev, nil, time.Minute, 1},
+		{"unversioned_node_in_cooldown", 0, &oldRev, time.Minute, 0},
+		{"same_revision_cooldown_expired", currentRev, &currentRev, 5 * time.Minute, 1},
+		{"same_revision_future_observation", currentRev, &currentRev, -time.Minute, 0},
+		{"old_revision_future_observation", currentRev, &oldRev, -time.Minute, 1},
+	}
+	for _, verdict := range []domain.ProbeVerdict{domain.VerdictError, domain.VerdictUnknown} {
+		for _, tc := range cases {
+			t.Run(string(verdict)+"/"+tc.name, func(t *testing.T) {
+				schedRepo := newMemoryScheduleRepo(domain.ProbeSchedule{
+					Enabled:         true,
+					IntervalSeconds: 3600,
+					Kinds:           []domain.ProbeKind{domain.ProbeKindBaseline},
+					NextDueAt:       &now,
+					Generation:      1,
+					UpdatedAt:       now,
+				})
+				nodeRepo := &memoryNodeRepo{nodes: []domain.Node{
+					{LogicalID: "node-rev", Active: true, ConnectionRevision: tc.nodeRevision},
+				}}
+				runRepo := &memoryRuns{items: make(map[string]domain.ProbeRun)}
+				obsRepo := newMemoryObsRepo()
+				obsRepo.SetObservation("node-rev", domain.ProbeKindBaseline, domain.ProbeObservation{
+					NodeLogicalID:      "node-rev",
+					Kind:               domain.ProbeKindBaseline,
+					Verdict:            verdict,
+					ObservedAt:         now.Add(-tc.observationAge),
+					ConnectionRevision: tc.observedRevision,
+				})
+				// An enabled source participates in automatic probing; its custom
+				// interval has elapsed for the recent observations, but not cooldown.
+				customInterval := 30
+				subRepo := &memorySubRepo{items: map[string]domain.Subscription{
+					"sub-active": {
+						ID: "sub-active", Enabled: true,
+						Config: domain.SubscriptionConfig{ProbePolicy: &domain.SubscriptionProbePolicy{
+							Mode:            domain.ProbePolicyModeCustom,
+							IntervalSeconds: &customInterval,
+						}},
+					},
+				}}
+				sourceRepo := &memoryNodeSourceRepo{sources: map[string][]domain.NodeSource{
+					"node-rev": {{NodeLogicalID: "node-rev", SubscriptionID: "sub-active"}},
+				}}
+				runner := &mockRunner{}
+				coord := NewPeriodicCoordinator(schedRepo, nodeRepo, runRepo, runner,
+					WithCoordinatorObservations(obsRepo),
+					WithCoordinatorSubscriptions(subRepo),
+					WithCoordinatorNodeSources(sourceRepo),
+					WithCoordinatorFailureCooldown(5*time.Minute),
+					WithCoordinatorClock(func() time.Time { return now }),
+				)
+
+				if err := coord.TriggerWindow(); err != nil {
+					t.Fatalf("TriggerWindow failed: %v", err)
+				}
+				if len(runner.executedRuns) != tc.wantRuns {
+					t.Fatalf("expected %d runs, got %d", tc.wantRuns, len(runner.executedRuns))
+				}
+				if tc.wantRuns > 0 {
+					scheduled := runner.executedNodeIDs[runner.executedRuns[0].ID]
+					if len(scheduled) != 1 || scheduled[0] != "node-rev" {
+						t.Fatalf("expected only node-rev scheduled, got %v", scheduled)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestPeriodicCoordinator_FailureCooldownAndPoolDeduplication(t *testing.T) {
 	t0 := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	currentClock := t0

@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -551,42 +550,59 @@ func isSensitiveKey(kLower string) bool {
 		strings.Contains(kLower, "token") ||
 		strings.Contains(kLower, "auth") ||
 		strings.Contains(kLower, "private") ||
-		kLower == "key" ||
-		kLower == "privkey" ||
-		kLower == "priv-key"
+		strings.Contains(kLower, "key") ||
+		strings.Contains(kLower, "uuid") ||
+		strings.Contains(kLower, "username")
 }
 
-func extractPluginSecrets(raw string, addSecret func(string)) {
-	if strings.HasPrefix(raw, "{") {
-		var m map[string]any
-		if err := json.Unmarshal([]byte(raw), &m); err == nil {
-			for k, val := range m {
-				kLower := strings.ToLower(strings.TrimSpace(k))
-				if isSensitiveKey(kLower) {
-					if strVal, ok := val.(string); ok {
-						addSecret(strVal)
-					}
+// extractPluginSecrets uses the exact renderer syntax and scalar conversion.
+// Incomplete/opaque values cannot authorize a diagnostic display name.
+func extractPluginSecrets(raw string, addSecret func(string)) bool {
+	options, err := parsePluginOptionMap("plugin-opts", raw)
+	if err != nil {
+		return false
+	}
+	complete := true
+	for key, value := range options {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "headers" {
+			headers, err := parsePluginHeaders("plugin-opts", "v2ray-plugin", value)
+			if err != nil {
+				complete = false
+				continue
+			}
+			for _, header := range headers {
+				addSecret(header)
+				// Header authentication grammars are opaque here. A whole header
+				// value is not proof that every embedded credential was extracted.
+				if strings.TrimSpace(header) != "" {
+					complete = false
 				}
 			}
-			return
-		}
-	}
-	for _, part := range strings.Split(raw, ";") {
-		part = strings.TrimSpace(part)
-		if part == "" {
 			continue
 		}
-		if k, v, found := strings.Cut(part, "="); found {
-			kLower := strings.ToLower(strings.TrimSpace(k))
-			if isSensitiveKey(kLower) {
-				addSecret(v)
-			}
+		scalar, err := parsePluginString("plugin-opts", "shadowsocks", key, value)
+		if err != nil {
+			// Never stringify objects/arrays/null that the scalar renderer rejects.
+			complete = false
+			continue
+		}
+		if isSensitiveKey(key) {
+			addSecret(scalar)
 		}
 	}
+	return complete
 }
 
-func collectSecrets(creds domain.InboundProtocolCredential) []string {
+// CollectCredentialSecrets returns credential values for diagnostic redaction,
+// including normalized secrets in plugin-opts/plugin_opts. The second result
+// reports whether the option values are fully understood for safe display;
+// callers must omit labels when it is false. It does NOT authorize rendering:
+// schema, alias conflict and target checks remain the renderer's responsibility.
+// Callers must never expose the returned secrets.
+func CollectCredentialSecrets(creds domain.InboundProtocolCredential) ([]string, bool) {
 	var secrets []string
+	complete := true
 	addSecret := func(s string) {
 		s = strings.TrimSpace(s)
 		if s != "" {
@@ -596,7 +612,9 @@ func collectSecrets(creds domain.InboundProtocolCredential) []string {
 
 	addSecret(creds.Password)
 	addSecret(creds.UUID)
+	addSecret(creds.Username)
 	addSecret(creds.PrivateKey)
+	addSecret(creds.PublicKey)
 	addSecret(creds.EffectivePreSharedKey())
 	addSecret(creds.PreSharedKey)
 	addSecret(creds.PresharedKey)
@@ -612,19 +630,37 @@ func collectSecrets(creds domain.InboundProtocolCredential) []string {
 				addSecret(vTrim)
 			}
 			if kLower == "plugin-opts" || kLower == "plugin_opts" {
-				extractPluginSecrets(vTrim, addSecret)
+				if !extractPluginSecrets(vTrim, addSecret) {
+					complete = false
+				}
 			}
 		}
 	}
 
-	return secrets
+	return secrets, complete
 }
 
 func sanitizeReason(reason string, creds domain.InboundProtocolCredential) string {
 	if reason == "" {
 		return reason
 	}
-	secrets := collectSecrets(creds)
+	secrets, complete := CollectCredentialSecrets(creds)
+	if !complete {
+		// Never echo an unproven reason when option decoding was incomplete.
+		// Shared parser errors have fixed, input-free text; retain that useful
+		// syntax diagnosis instead of inventing a tolerant second parser.
+		for _, alias := range []string{"plugin-opts", "plugin_opts"} {
+			if raw := strings.TrimSpace(creds.Transport[alias]); raw != "" {
+				if _, err := parsePluginOptionMap("plugin-opts", raw); err != nil {
+					var capErr *CapabilityError
+					if errors.As(err, &capErr) {
+						return capErr.Reason
+					}
+				}
+			}
+		}
+		return "invalid or opaque shadowsocks plugin options; diagnostic details omitted"
+	}
 	sort.Slice(secrets, func(i, j int) bool {
 		return len(secrets[i]) > len(secrets[j])
 	})

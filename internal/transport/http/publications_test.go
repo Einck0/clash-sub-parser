@@ -2441,8 +2441,12 @@ func TestPublication_MihomoPreviewTargetedIntegration_HTTP_Socks5_AnyTLS_Mihomo2
 			t.Errorf("expected VMess as the only included node for %s, got %+v", target, manifest.Included)
 		}
 		excludedIDs := make(map[string]bool)
+		wantLabels := map[string]string{httpID: "HTTP-Node", socksID: "SOCKS5-Node", anytlsID: "AnyTLS-Node"}
 		for _, excluded := range manifest.Excluded {
 			excludedIDs[excluded.NodeID] = true
+			if excluded.DisplayName != wantLabels[excluded.NodeID] {
+				t.Errorf("missing snapshot identity in %s management preview: %+v", target, excluded)
+			}
 			if excluded.Code != "unsupported_target_capability" || excluded.Reason == "" {
 				t.Errorf("expected target-specific exclusion reason for %s, got %+v", target, excluded)
 			}

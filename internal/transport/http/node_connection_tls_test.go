@@ -18,6 +18,7 @@ import (
 	"clash-sub-parser/internal/repository/sqlite"
 	"clash-sub-parser/internal/resolver"
 	transporthttp "clash-sub-parser/internal/transport/http"
+	singjson "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
 	"gopkg.in/yaml.v3"
 )
@@ -269,7 +270,7 @@ func assertTLSReadbackExport(t *testing.T, node domain.Node, expectedSNI map[dom
 					} `json:"tls"`
 				} `json:"outbounds"`
 			}
-			if err := json.Unmarshal(result.Content, &config); err != nil {
+			if err := singjson.UnmarshalContext(context.Background(), result.Content, &config); err != nil {
 				t.Fatal(err)
 			}
 			found := false

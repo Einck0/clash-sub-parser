@@ -58,6 +58,49 @@ describe('useGroupPreview Composable', () => {
     expect(preview.snapshotPreview.value?.member_count).toBe(5)
   })
 
+  it('passes URL-Test interval and explicit zero tolerance to preview', async () => {
+    const postSpy = vi.spyOn(api, 'post').mockResolvedValue({
+      selection_digest: 'urltest-digest',
+      node_count: 1,
+      members: [],
+    })
+    const preview = useGroupPreview()
+
+    preview.triggerImmediate({
+      ...testPayload,
+      group_type: 'urltest',
+      urltest_interval: 120,
+      urltest_tolerance: 0,
+    })
+    await Promise.resolve()
+
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/groups/preview', expect.objectContaining({
+      group_type: 'urltest',
+      urltest_interval: 120,
+      urltest_tolerance: 0,
+    }))
+  })
+
+  it('omits URL-Test settings from preview for non-URL-Test groups', async () => {
+    const postSpy = vi.spyOn(api, 'post').mockResolvedValue({
+      selection_digest: 'select-digest',
+      node_count: 1,
+      members: [],
+    })
+    const preview = useGroupPreview()
+
+    preview.triggerImmediate({
+      ...testPayload,
+      urltest_interval: 120,
+      urltest_tolerance: 0,
+    })
+    await Promise.resolve()
+
+    const body = postSpy.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(body).not.toHaveProperty('urltest_interval')
+    expect(body).not.toHaveProperty('urltest_tolerance')
+  })
+
   it('discards stale out-of-order preview response and keeps latest generation', async () => {
     let resolveGen1!: (v: any) => void
     let resolveGen2!: (v: any) => void

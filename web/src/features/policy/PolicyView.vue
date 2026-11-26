@@ -211,6 +211,8 @@ async function handleSaveGroup(data: {
   position?: number
   emptyFallbackPass: boolean
   inheritGlobalFilter?: boolean
+  urltest_interval?: number
+  urltest_tolerance?: number
   sources: MemberSource[]
   expectedRevision?: number
 }) {
@@ -224,6 +226,12 @@ async function handleSaveGroup(data: {
         group_type: data.type,
         position: data.position,
         inherit_global_filter: data.inheritGlobalFilter,
+        ...(data.type === 'urltest'
+          ? {
+              urltest_interval: data.urltest_interval,
+              urltest_tolerance: data.urltest_tolerance,
+            }
+          : {}),
         expected_revision: data.expectedRevision ?? activeGroup.value.revision,
         sources: data.sources,
       })
@@ -235,6 +243,12 @@ async function handleSaveGroup(data: {
         group_type: data.type,
         position: data.position,
         inherit_global_filter: data.inheritGlobalFilter,
+        ...(data.type === 'urltest'
+          ? {
+              urltest_interval: data.urltest_interval,
+              urltest_tolerance: data.urltest_tolerance,
+            }
+          : {}),
         sources: data.sources,
       })
       activeGroup.value = created

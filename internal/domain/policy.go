@@ -17,6 +17,8 @@ type AtomicGroupRepository interface {
 
 type NodeGroup struct {
 	EmptyFallbackPass   bool            `json:"empty_fallback_pass"`
+	URLTestInterval     *int            `json:"urltest_interval,omitempty"`
+	URLTestTolerance    *int            `json:"urltest_tolerance,omitempty"`
 	InheritGlobalFilter bool            `json:"inherit_global_filter"`
 	ID                  string          `json:"id"`
 	Name                string          `json:"name"`
@@ -447,6 +449,28 @@ func ValidatePolicyTopology(
 	return ValidatePolicyRules(rules, groupSet, requireTerminalMatch)
 }
 
+// ValidatePolicyRuleExpression validates expression parameters shared by policy writes,
+// previews and topology checks. Target compilers retain their own defense-in-depth checks.
+func ValidatePolicyRuleExpression(expr string) error {
+	parts := strings.Split(expr, ",")
+	kind := strings.ToUpper(strings.TrimSpace(parts[0]))
+	if len(parts) > 2 {
+		for _, param := range parts[2:] {
+			if !strings.EqualFold(strings.TrimSpace(param), "no-resolve") {
+				continue
+			}
+			switch kind {
+			case "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "GEOSITE", "PROCESS-NAME":
+				return NewValidationError(
+					"unsupported_rule_parameter",
+					fmt.Sprintf("%s rules do not support no-resolve. For domain/process matching, remove the option; if you intended IP matching, choose an appropriate IP rule type and value instead. IP-CIDR/IP-CIDR6, GEOIP and RULE-SET can retain no-resolve when needed", kind),
+				)
+			}
+		}
+	}
+	return nil
+}
+
 // ValidatePolicyRules verifies rule expressions, positions, target group references, builtin targets, and MATCH rule constraints.
 func ValidatePolicyRules(rules []PolicyRule, groupSet map[string]bool, requireTerminalMatch bool) error {
 	if len(rules) == 0 {
@@ -494,6 +518,17 @@ func ValidatePolicyRules(rules []PolicyRule, groupSet map[string]bool, requireTe
 			if len(groupSet) > 0 && !groupSet[rule.TargetGroupID] {
 				return NewValidationError("target_group_not_found", fmt.Sprintf("target group %s does not exist for policy rule", rule.TargetGroupID))
 			}
+		}
+
+		if err := ValidatePolicyRuleExpression(rule.Expression); err != nil {
+			if validationErr, ok := AsDomainError(err); ok {
+				validationErr.Field = "expression"
+				validationErr.Details = map[string]string{
+					"rule_id":  rule.ID,
+					"position": fmt.Sprint(rule.Position),
+				}
+			}
+			return err
 		}
 
 		if IsMatchRule(rule.Expression) {

@@ -1011,8 +1011,8 @@ type mihomoGroup struct {
 	Type          string   `yaml:"type"`
 	Proxies       []string `yaml:"proxies"`
 	URL           string   `yaml:"url,omitempty"`
-	Interval      int      `yaml:"interval,omitempty"`
-	Tolerance     int      `yaml:"tolerance,omitempty"`
+	Interval      *int     `yaml:"interval,omitempty"`
+	Tolerance     *int     `yaml:"tolerance,omitempty"`
 	Strategy      string   `yaml:"strategy,omitempty"`
 }
 
@@ -1618,29 +1618,41 @@ func buildMihomoGroup(loc string, group resolver.ResolvedGroup, members []string
 			Proxies: members,
 		}, nil
 	case domain.GroupTypeURLTest:
+		interval := group.URLTestInterval
+		if interval == nil {
+			defaultInterval := defaultMihomoProbeInterval
+			interval = &defaultInterval
+		}
+		tolerance := group.URLTestTolerance
+		if tolerance == nil {
+			defaultTolerance := defaultMihomoURLTestTolerance
+			tolerance = &defaultTolerance
+		}
 		return mihomoGroup{
 			Name:      group.Name,
 			Type:      "url-test",
 			Proxies:   members,
 			URL:       defaultMihomoProbeURL,
-			Interval:  defaultMihomoProbeInterval,
-			Tolerance: defaultMihomoURLTestTolerance,
+			Interval:  interval,
+			Tolerance: tolerance,
 		}, nil
 	case domain.GroupTypeFallback:
+		interval := defaultMihomoProbeInterval
 		return mihomoGroup{
 			Name:     group.Name,
 			Type:     "fallback",
 			Proxies:  members,
 			URL:      defaultMihomoProbeURL,
-			Interval: defaultMihomoProbeInterval,
+			Interval: &interval,
 		}, nil
 	case domain.GroupTypeLoadBalance:
+		interval := defaultMihomoProbeInterval
 		return mihomoGroup{
 			Name:     group.Name,
 			Type:     "load-balance",
 			Proxies:  members,
 			URL:      defaultMihomoProbeURL,
-			Interval: defaultMihomoProbeInterval,
+			Interval: &interval,
 			Strategy: defaultMihomoLoadBalancePolicy,
 		}, nil
 	default:

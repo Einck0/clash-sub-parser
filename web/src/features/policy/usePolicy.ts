@@ -11,7 +11,7 @@ import type {
   PolicyGroup,
   ValidationResult,
 } from './policyTypes'
-import { normalizeGroupSources } from './policyTypes'
+import { DEFAULT_URLTEST_INTERVAL, DEFAULT_URLTEST_TOLERANCE, normalizeGroupSources } from './policyTypes'
 import { displayText } from '../../utils/displayNames'
 
 export type TopologyStatus = 'idle' | 'loading' | 'error' | 'ready'
@@ -33,6 +33,8 @@ export interface CreateGroupInput {
   node_filter?: NodeFilterSpec | null
   empty_fallback_pass?: boolean
   inherit_global_filter?: boolean
+  urltest_interval?: number
+  urltest_tolerance?: number
 }
 
 export interface UpdateGroupInput {
@@ -45,6 +47,8 @@ export interface UpdateGroupInput {
   expected_revision?: number
   node_filter?: NodeFilterSpec | null
   edges?: GroupEdge[]
+  urltest_interval?: number
+  urltest_tolerance?: number
 }
 
 export function usePolicy() {
@@ -200,8 +204,14 @@ export function usePolicy() {
         group_type: groupType,
         inherit_global_filter: inheritGlobalFilter,
       }
-      if (typeof dataOrName === 'object' && dataOrName !== null && dataOrName.position !== undefined) {
-        payload.position = dataOrName.position
+      if (typeof dataOrName === 'object' && dataOrName !== null) {
+        if (dataOrName.group_type === 'urltest') {
+          payload.urltest_interval = dataOrName.urltest_interval ?? DEFAULT_URLTEST_INTERVAL
+          payload.urltest_tolerance = dataOrName.urltest_tolerance ?? DEFAULT_URLTEST_TOLERANCE
+        }
+        if (dataOrName.position !== undefined) {
+          payload.position = dataOrName.position
+        }
       }
       payload.sources = sources
       const created = await api.post<PolicyGroup>('/api/v1/policies/groups', payload)
@@ -238,6 +248,10 @@ export function usePolicy() {
         if (dataOrName.position !== undefined) payload.position = dataOrName.position
         if (dataOrName.inherit_global_filter !== undefined) payload.inherit_global_filter = dataOrName.inherit_global_filter
         if (dataOrName.expected_revision !== undefined) payload.expected_revision = dataOrName.expected_revision
+        if (dataOrName.group_type === undefined || dataOrName.group_type === 'urltest') {
+          if (dataOrName.urltest_interval !== undefined) payload.urltest_interval = dataOrName.urltest_interval
+          if (dataOrName.urltest_tolerance !== undefined) payload.urltest_tolerance = dataOrName.urltest_tolerance
+        }
         if (Array.isArray(dataOrName.sources)) {
           payload.sources = dataOrName.sources.map((s, idx) => ({ ...s, position: idx }))
         } else if (dataOrName.edges !== undefined || dataOrName.node_filter !== undefined) {
@@ -467,6 +481,10 @@ export function usePolicy() {
         position: s.position !== undefined ? s.position : idx,
       })),
       target: payload.target || 'mihomo',
+    }
+    if (payload.group_type === 'urltest') {
+      body.urltest_interval = payload.urltest_interval ?? DEFAULT_URLTEST_INTERVAL
+      body.urltest_tolerance = payload.urltest_tolerance ?? DEFAULT_URLTEST_TOLERANCE
     }
     if (payload.inherit_global_filter !== undefined) {
       body.inherit_global_filter = payload.inherit_global_filter

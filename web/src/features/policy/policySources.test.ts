@@ -1536,6 +1536,53 @@ describe('Feature-Level Policy Sources & Pipeline Rebuild', () => {
     })
   })
 
+  it('shows URL-Test settings and emits interval and explicit zero tolerance on save', async () => {
+    const group: PolicyGroup = {
+      id: 'grp-urltest',
+      name: 'Auto Test',
+      group_type: 'urltest',
+      urltest_interval: 45,
+      urltest_tolerance: 10,
+      sources: [],
+      revision: 2,
+    }
+    let saved: any = null
+    const app = createApp({
+      render() {
+        return h(PolicyEditorSheet, {
+          open: true,
+          group,
+          allGroups: [group],
+          topologyStatus: 'ready',
+          onSaveGroup: (data: any) => { saved = data },
+        })
+      },
+    })
+    app.mount(container)
+    await nextTick()
+
+    const settings = container.querySelector('[data-testid="urltest-settings"]')
+    expect(settings).not.toBeNull()
+    const interval = container.querySelector('[data-testid="urltest-interval-input"]') as HTMLInputElement
+    const tolerance = container.querySelector('[data-testid="urltest-tolerance-input"]') as HTMLInputElement
+    expect(interval.value).toBe('45')
+    expect(tolerance.value).toBe('10')
+
+    interval.value = '120'
+    interval.dispatchEvent(new Event('input', { bubbles: true }))
+    tolerance.value = '0'
+    tolerance.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+
+    const saveBtn = container.querySelector('[data-testid="policy-sheet-save-btn"]') as HTMLButtonElement
+    expect(saveBtn.disabled).toBe(false)
+    saveBtn.click()
+    await nextTick()
+    expect(saved).toMatchObject({ urltest_interval: 120, urltest_tolerance: 0 })
+
+    app.unmount()
+  })
+
   // 21. FR-RM5: Topology Completeness & Guarding Group References/Save
   describe('FR-RM5: Topology Error Handling in PolicyEditorSheet', () => {
     it('disables save and displays error banner with retry when topologyStatus is error', async () => {

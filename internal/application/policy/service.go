@@ -95,6 +95,10 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 		return nil, domain.NewValidationError("invalid_group_id", fmt.Sprintf("invalid group UUIDv7: %s", groupID))
 	}
 
+	if err := validateURLTestSettings(cmd.GroupType, cmd.URLTestInterval, cmd.URLTestTolerance); err != nil {
+		return nil, err
+	}
+
 	now := domain.NowUTC()
 	pos := 0
 	if cmd.Position != nil {
@@ -111,6 +115,8 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 		ID:                  groupID,
 		Name:                name,
 		GroupType:           cmd.GroupType,
+		URLTestInterval:     cmd.URLTestInterval,
+		URLTestTolerance:    cmd.URLTestTolerance,
 		Position:            pos,
 		CreatedAt:           now,
 		UpdatedAt:           now,
@@ -244,6 +250,22 @@ func (s *Service) CreateGroup(ctx context.Context, cmd CreateGroupCommand) (*Gro
 	return toGroupView(&group, edges), nil
 }
 
+func validateURLTestSettings(groupType domain.GroupType, interval, tolerance *int) error {
+	if groupType != domain.GroupTypeURLTest {
+		if interval != nil || tolerance != nil {
+			return domain.NewValidationError("invalid_urltest_settings", "interval and tolerance can only be set for urltest groups")
+		}
+		return nil
+	}
+	if interval != nil && (*interval < 0 || *interval > 86400) {
+		return domain.NewValidationError("invalid_urltest_interval", "urltest interval must be between 0 and 86400 seconds (0 disables periodic testing); omit it to use the 300-second default")
+	}
+	if tolerance != nil && (*tolerance < 0 || *tolerance > 60000) {
+		return domain.NewValidationError("invalid_urltest_tolerance", "urltest tolerance must be between 0 and 60000 milliseconds")
+	}
+	return nil
+}
+
 // GetGroup retrieves a single policy group with its edges by ID.
 func (s *Service) GetGroup(ctx context.Context, id string) (*GroupView, error) {
 	group, err := s.policyRepo.GetGroupByID(ctx, id)
@@ -345,6 +367,20 @@ func (s *Service) UpdateGroup(ctx context.Context, cmd UpdateGroupCommand) (*Gro
 			return nil, domain.NewValidationError("invalid_group_type", fmt.Sprintf("unsupported group type: %s", *cmd.GroupType))
 		}
 		group.GroupType = *cmd.GroupType
+		if group.GroupType != domain.GroupTypeURLTest {
+			group.URLTestInterval = nil
+			group.URLTestTolerance = nil
+		}
+	}
+
+	if cmd.URLTestInterval != nil {
+		group.URLTestInterval = cmd.URLTestInterval
+	}
+	if cmd.URLTestTolerance != nil {
+		group.URLTestTolerance = cmd.URLTestTolerance
+	}
+	if err := validateURLTestSettings(group.GroupType, group.URLTestInterval, group.URLTestTolerance); err != nil {
+		return nil, err
 	}
 
 	existingGroups, err := s.policyRepo.ListGroups(ctx)
@@ -575,6 +611,9 @@ func (s *Service) CreatePolicyRule(ctx context.Context, cmd CreatePolicyRuleComm
 		s.recordAudit(ctx, cmd.ActorKind, cmd.RequestID, "policy_rule.create", domain.AuditResultFailure, "empty expression")
 		return nil, domain.NewValidationError("invalid_expression", "policy rule expression cannot be empty")
 	}
+	if err := domain.ValidatePolicyRuleExpression(expr); err != nil {
+		return nil, err
+	}
 
 	if cmd.Position < 0 {
 		return nil, domain.NewValidationError("invalid_position", "position must be non-negative")
@@ -751,6 +790,14 @@ func (s *Service) UpdatePolicyRule(ctx context.Context, cmd UpdatePolicyRuleComm
 		}
 		existing.TargetGroupID = *cmd.TargetGroupID
 		existing.BuiltinTarget = ""
+	}
+
+	// Disabled historical records can be quarantined without rewriting their expression.
+	// Submitted expressions and rules that remain enabled still require validation.
+	if cmd.Expression != nil || existing.Enabled {
+		if err := domain.ValidatePolicyRuleExpression(existing.Expression); err != nil {
+			return nil, err
+		}
 	}
 
 	if existing.BuiltinTarget == "" && existing.TargetGroupID == "" {
@@ -1091,6 +1138,8 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 	var groupType domain.GroupType = domain.GroupTypeSelect
 	var emptyFallback bool = false
 	var revision int64 = 1
+	var interval *int
+	var tolerance *int
 
 	if cmd.GroupID != nil && *cmd.GroupID != "" {
 		groupID = *cmd.GroupID
@@ -1100,6 +1149,8 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 		}
 		name = existing.Name
 		groupType = existing.GroupType
+		interval = existing.URLTestInterval
+		tolerance = existing.URLTestTolerance
 		emptyFallback = existing.EmptyFallbackPass
 		revision = existing.Revision
 
@@ -1125,6 +1176,10 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 			return nil, domain.NewValidationError("invalid_group_type", fmt.Sprintf("unsupported group type: %s", *cmd.GroupType))
 		}
 		groupType = *cmd.GroupType
+		if groupType != domain.GroupTypeURLTest {
+			interval = nil
+			tolerance = nil
+		}
 	}
 	if cmd.EmptyFallbackPass != nil {
 		emptyFallback = *cmd.EmptyFallbackPass
@@ -1135,10 +1190,22 @@ func (s *Service) PreviewGroup(ctx context.Context, cmd PreviewGroupCommand) (*G
 		inheritFilter = *cmd.InheritGlobalFilter
 	}
 
+	if cmd.URLTestInterval != nil {
+		interval = cmd.URLTestInterval
+	}
+	if cmd.URLTestTolerance != nil {
+		tolerance = cmd.URLTestTolerance
+	}
+	if err := validateURLTestSettings(groupType, interval, tolerance); err != nil {
+		return nil, err
+	}
+
 	previewGroup := domain.NodeGroup{
 		ID:                  groupID,
 		Name:                name,
 		GroupType:           groupType,
+		URLTestInterval:     interval,
+		URLTestTolerance:    tolerance,
 		EmptyFallbackPass:   emptyFallback,
 		InheritGlobalFilter: inheritFilter,
 		Revision:            revision,
@@ -2014,6 +2081,8 @@ func toGroupView(group *domain.NodeGroup, edges []domain.GroupEdge) *GroupView {
 		ID:                  group.ID,
 		Name:                group.Name,
 		GroupType:           group.GroupType,
+		URLTestInterval:     group.URLTestInterval,
+		URLTestTolerance:    group.URLTestTolerance,
 		Position:            group.Position,
 		Revision:            rev,
 		Sources:             sources,

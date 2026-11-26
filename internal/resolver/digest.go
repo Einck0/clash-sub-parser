@@ -54,6 +54,8 @@ type canonicalInputGroup struct {
 	ID                string                   `json:"id"`
 	Name              string                   `json:"name"`
 	GroupType         domain.GroupType         `json:"group_type"`
+	URLTestInterval   *int                     `json:"urltest_interval,omitempty"`
+	URLTestTolerance  *int                     `json:"urltest_tolerance,omitempty"`
 	Position          int                      `json:"position"`
 	Sources           []canonicalSourceLogical `json:"sources,omitempty"`
 }
@@ -148,6 +150,8 @@ func computeInputDigest(input ResolveInput) (string, error) {
 			ID:                g.ID,
 			Name:              g.Name,
 			GroupType:         g.GroupType,
+			URLTestInterval:   g.URLTestInterval,
+			URLTestTolerance:  g.URLTestTolerance,
 			Position:          g.Position,
 			Sources:           canonicalizeSources(srcs),
 		}
@@ -341,6 +345,8 @@ type canonicalSnapshotGroup struct {
 	ID                 string                   `json:"id"`
 	Name               string                   `json:"name"`
 	GroupType          domain.GroupType         `json:"group_type"`
+	URLTestInterval    *int                     `json:"urltest_interval,omitempty"`
+	URLTestTolerance   *int                     `json:"urltest_tolerance,omitempty"`
 	Members            []ResolvedGroupMember    `json:"members"`
 	ChildGroupIDs      []string                 `json:"child_group_ids"`
 	NodeLogicalIDs     []string                 `json:"node_logical_ids"`
@@ -382,6 +388,8 @@ func computeSnapshotDigest(snap *ResolvedPolicySnapshot) (string, error) {
 			ID:                 g.ID,
 			Name:               g.Name,
 			GroupType:          g.GroupType,
+			URLTestInterval:    g.URLTestInterval,
+			URLTestTolerance:   g.URLTestTolerance,
 			Members:            g.Members,
 			ChildGroupIDs:      g.ChildGroupIDs,
 			NodeLogicalIDs:     g.NodeLogicalIDs,

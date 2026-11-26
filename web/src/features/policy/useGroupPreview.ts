@@ -5,6 +5,7 @@ import type {
   GroupDraftPreviewResponse,
   ResolverDiagnostic,
 } from './policyTypes'
+import { DEFAULT_URLTEST_INTERVAL, DEFAULT_URLTEST_TOLERANCE } from './policyTypes'
 
 export function sanitizeErrorMessage(msg: string): string {
   if (!msg) return ''
@@ -50,6 +51,10 @@ export function useGroupPreview() {
           position: s.position !== undefined ? s.position : idx,
         })),
         target: payload.target || 'mihomo',
+      }
+      if (payload.group_type === 'urltest') {
+        body.urltest_interval = payload.urltest_interval ?? DEFAULT_URLTEST_INTERVAL
+        body.urltest_tolerance = payload.urltest_tolerance ?? DEFAULT_URLTEST_TOLERANCE
       }
       if (payload.inherit_global_filter !== undefined) {
         body.inherit_global_filter = payload.inherit_global_filter

@@ -7,6 +7,8 @@ import type {
   SourceOperation,
 } from './policyTypes'
 import {
+  DEFAULT_URLTEST_INTERVAL,
+  DEFAULT_URLTEST_TOLERANCE,
   normalizeGroupSources,
   validateSourceInput,
 } from './policyTypes'
@@ -17,6 +19,8 @@ export interface GroupDraftSavePayload {
   position?: number
   emptyFallbackPass: boolean
   inheritGlobalFilter: boolean
+  urltest_interval?: number
+  urltest_tolerance?: number
   sources: MemberSource[]
   expectedRevision?: number
 }
@@ -64,6 +68,8 @@ export function useGroupDraft() {
   const position = ref(0)
   const emptyFallbackPass = ref(false)
   const inheritGlobalFilter = ref(true)
+  const urltestInterval = ref<number | ''>(DEFAULT_URLTEST_INTERVAL)
+  const urltestTolerance = ref<number | ''>(DEFAULT_URLTEST_TOLERANCE)
   const expectedRevision = ref(1)
 
   const sources = ref<MemberSource[]>([])
@@ -88,6 +94,8 @@ export function useGroupDraft() {
       position: position.value,
       emptyFallbackPass: emptyFallbackPass.value,
       inheritGlobalFilter: inheritGlobalFilter.value,
+      urltestInterval: groupType.value === 'urltest' ? urltestInterval.value : undefined,
+      urltestTolerance: groupType.value === 'urltest' ? urltestTolerance.value : undefined,
       sources: sources.value.map(cleanSourceForComparison),
     }
     return JSON.stringify(data)
@@ -115,6 +123,8 @@ export function useGroupDraft() {
       position.value = group.position ?? 0
       emptyFallbackPass.value = group.empty_fallback_pass === true
       inheritGlobalFilter.value = group.inherit_global_filter !== false
+      urltestInterval.value = group.urltest_interval ?? DEFAULT_URLTEST_INTERVAL
+      urltestTolerance.value = group.urltest_tolerance ?? DEFAULT_URLTEST_TOLERANCE
       expectedRevision.value = group.revision ?? 1
 
       const normalized = normalizeGroupSources(group)
@@ -139,6 +149,8 @@ export function useGroupDraft() {
       position.value = 0
       emptyFallbackPass.value = false
       inheritGlobalFilter.value = true
+      urltestInterval.value = DEFAULT_URLTEST_INTERVAL
+      urltestTolerance.value = DEFAULT_URLTEST_TOLERANCE
       expectedRevision.value = 1
       sources.value = []
     }
@@ -270,6 +282,18 @@ export function useGroupDraft() {
   }
 
   function checkDraftValidity(): boolean {
+    if (groupType.value === 'urltest') {
+      const interval = urltestInterval.value
+      const tolerance = urltestTolerance.value
+      if (interval !== '' && (!Number.isInteger(interval) || interval < 0 || interval > 86400)) {
+        formError.value = '测速间隔必须是 0 到 86400 秒的整数。'
+        return false
+      }
+      if (tolerance !== '' && (!Number.isInteger(tolerance) || tolerance < 0 || tolerance > 60000)) {
+        formError.value = '容忍抖动必须是 0 到 60000 毫秒的整数。'
+        return false
+      }
+    }
     if (hasInvalidFilterSources.value) {
       formError.value = '存在未完成或无效的筛选条件，请完善或删除后再保存。'
       return false
@@ -288,6 +312,12 @@ export function useGroupDraft() {
       position: position.value,
       emptyFallbackPass: emptyFallbackPass.value,
       inheritGlobalFilter: inheritGlobalFilter.value,
+      ...(groupType.value === 'urltest'
+        ? {
+            urltest_interval: urltestInterval.value === '' ? DEFAULT_URLTEST_INTERVAL : urltestInterval.value,
+            urltest_tolerance: urltestTolerance.value === '' ? DEFAULT_URLTEST_TOLERANCE : urltestTolerance.value,
+          }
+        : {}),
       expectedRevision: expectedRevision.value,
       sources: sources.value.map((s, idx) => {
         const clean: MemberSource = {
@@ -317,6 +347,8 @@ export function useGroupDraft() {
     position,
     emptyFallbackPass,
     inheritGlobalFilter,
+    urltestInterval,
+    urltestTolerance,
     expectedRevision,
     sources,
     invalidFilterSources,

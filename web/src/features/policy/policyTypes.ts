@@ -2,6 +2,9 @@ import type { CompilerTarget } from '../publications/publicationTypes'
 
 export type GroupType = 'select' | 'urltest' | 'fallback' | 'loadbalance'
 
+export const DEFAULT_URLTEST_INTERVAL = 300
+export const DEFAULT_URLTEST_TOLERANCE = 50
+
 export type RuleAction = 'allow' | 'reject' | 'quarantine'
 
 export type SupportedProtocol =
@@ -72,6 +75,8 @@ export interface PolicyGroup {
   position?: number
   empty_fallback_pass?: boolean
   inherit_global_filter?: boolean
+  urltest_interval?: number | null
+  urltest_tolerance?: number | null
   revision?: number
   sources?: MemberSource[]
   edges?: GroupEdge[]
@@ -781,6 +786,8 @@ export interface GroupDraftPreviewPayload {
   group_type?: GroupType
   empty_fallback_pass?: boolean
   inherit_global_filter?: boolean
+  urltest_interval?: number
+  urltest_tolerance?: number
   sources: MemberSource[]
   target?: string
 }

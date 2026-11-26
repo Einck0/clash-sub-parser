@@ -56,6 +56,8 @@ const form = ref<RuleFormState>({
 })
 
 const initialSnapshot = ref<string>('')
+const noResolveRuleTypes = new Set(['IP-CIDR', 'IP-CIDR6', 'SRC-IP-CIDR', 'GEOIP', 'RULE-SET'])
+const supportsNoResolve = computed(() => noResolveRuleTypes.has(form.value.rule_type))
 
 function resetForm() {
   if (props.rule) {
@@ -136,6 +138,7 @@ function handleClose() {
 
 function handleSubmit() {
   if (props.saving) return
+  if (form.value.no_resolve && !supportsNoResolve.value) return
   const {
     category_id,
     name,
@@ -260,16 +263,30 @@ function handleSubmit() {
       </div>
 
       <!-- No Resolve Checkbox -->
-      <div v-if="form.rule_type !== 'MATCH'" class="flex items-center gap-2">
-        <input
-          id="rule-no-resolve-field"
-          v-model="form.no_resolve"
-          type="checkbox"
-          class="checkbox checkbox-xs checkbox-primary"
-        />
-        <label for="rule-no-resolve-field" class="text-xs cursor-pointer select-none">
-          {{ t('rules.noResolve') }}
-        </label>
+      <div v-if="form.rule_type !== 'MATCH' || form.no_resolve" class="space-y-1">
+        <div class="flex items-center gap-2">
+          <input
+            id="rule-no-resolve-field"
+            v-model="form.no_resolve"
+            type="checkbox"
+            :disabled="!supportsNoResolve && !form.no_resolve"
+            :aria-invalid="form.no_resolve && !supportsNoResolve"
+            aria-describedby="rule-no-resolve-help"
+            class="checkbox checkbox-xs checkbox-primary"
+          />
+          <label for="rule-no-resolve-field" class="text-xs cursor-pointer select-none">
+            {{ t('rules.noResolve') }}
+          </label>
+        </div>
+        <p
+          v-if="!supportsNoResolve"
+          id="rule-no-resolve-help"
+          :data-testid="form.no_resolve ? 'rule-no-resolve-warning' : 'rule-no-resolve-help'"
+          :role="form.no_resolve ? 'alert' : undefined"
+          :class="['text-xs', form.no_resolve ? 'text-warning' : 'text-base-content/60']"
+        >
+          {{ uiText('no-resolve 用于跳过目标 IP 规则的 DNS 解析，当前类型不支持。若要按域名或进程匹配，请取消此选项；若要按 IP 匹配，请确认并选择合适的 IP 规则类型和值。', 'no-resolve skips DNS resolution for destination IP rules and is not supported by this type. For domain or process matching, clear the option. For IP matching, choose an appropriate IP rule type and value.') }}
+        </p>
       </div>
 
       <!-- Target Selector (Segmented Radio) -->

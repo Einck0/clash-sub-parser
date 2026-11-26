@@ -24,6 +24,8 @@ type createGroupRequest struct {
 	ID                  string                 `json:"id,omitempty"`
 	Name                string                 `json:"name"`
 	GroupType           domain.GroupType       `json:"group_type"`
+	URLTestInterval     *int                   `json:"urltest_interval,omitempty"`
+	URLTestTolerance    *int                   `json:"urltest_tolerance,omitempty"`
 	Position            *int                   `json:"position,omitempty"`
 	Sources             []domain.MemberSource  `json:"sources,omitempty"`
 	Edges               []policy.EdgeInput     `json:"edges,omitempty"`
@@ -37,12 +39,16 @@ type updateGroupRequest struct {
 	GroupType           *domain.GroupType      `json:"group_type,omitempty"`
 	Position            *int                   `json:"position,omitempty"`
 	ExpectedRevision    *int64                 `json:"expected_revision,omitempty"`
+	URLTestInterval     *int                   `json:"urltest_interval,omitempty"`
+	URLTestTolerance    *int                   `json:"urltest_tolerance,omitempty"`
 	Sources             *[]domain.MemberSource `json:"sources,omitempty"`
 	Edges               *[]policy.EdgeInput    `json:"edges,omitempty"`
 	NodeFilter          *domain.NodeFilterSpec `json:"node_filter,omitempty"`
 }
 
 type previewGroupRequest struct {
+	URLTestInterval     *int                   `json:"urltest_interval,omitempty"`
+	URLTestTolerance    *int                   `json:"urltest_tolerance,omitempty"`
 	GroupID             *string                `json:"group_id,omitempty"`
 	ExpectedRevision    *int64                 `json:"expected_revision,omitempty"`
 	Name                *string                `json:"name,omitempty"`
@@ -247,6 +253,8 @@ func (h policyHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 		ID:                  body.ID,
 		Name:                body.Name,
 		GroupType:           body.GroupType,
+		URLTestInterval:     body.URLTestInterval,
+		URLTestTolerance:    body.URLTestTolerance,
 		Position:            body.Position,
 		Sources:             body.Sources,
 		Edges:               body.Edges,
@@ -300,6 +308,8 @@ func (h policyHandler) updateGroup(w http.ResponseWriter, r *http.Request) {
 		ID:                  id,
 		Name:                body.Name,
 		GroupType:           body.GroupType,
+		URLTestInterval:     body.URLTestInterval,
+		URLTestTolerance:    body.URLTestTolerance,
 		Position:            body.Position,
 		ExpectedRevision:    body.ExpectedRevision,
 		Sources:             body.Sources,
@@ -333,6 +343,8 @@ func (h policyHandler) previewGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.service.PreviewGroup(r.Context(), policy.PreviewGroupCommand{
+		URLTestInterval:     body.URLTestInterval,
+		URLTestTolerance:    body.URLTestTolerance,
 		GroupID:             body.GroupID,
 		ExpectedRevision:    body.ExpectedRevision,
 		Name:                body.Name,

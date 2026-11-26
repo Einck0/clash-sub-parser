@@ -507,6 +507,21 @@ func TestCompileMihomo_AllTenProtocolsFourGroupsFourteenRules_AndOfficialValidat
 	if execErr != nil {
 		t.Fatalf("official mihomo -t failed on 7-protocol 4-group 14-rule config: %v\nOutput:\n%s\nConfig:\n%s", execErr, string(output), out)
 	}
+	zero := 0
+	snapshot.Groups[1].URLTestInterval = new(int)
+	*snapshot.Groups[1].URLTestInterval = 120
+	snapshot.Groups[1].URLTestTolerance = &zero
+	custom, err := compiler.CompileMihomo(ctx, snapshot)
+	if err != nil || !strings.Contains(string(custom.Content), "interval: 120") || !strings.Contains(string(custom.Content), "tolerance: 0") {
+		t.Fatalf("custom measurements lost in export: %v\n%s", err, custom.Content)
+	}
+	if writeErr := os.WriteFile(cfgPath, custom.Content, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	cmd = exec.Command(mihomoBin, "-t", "-d", tmpDir, "-f", cfgPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("official mihomo rejected custom URL-Test measurements: %v\n%s", err, output)
+	}
 }
 
 func TestCompileMihomo_FailsClosedWithoutCredentials(t *testing.T) {
@@ -925,6 +940,16 @@ func TestCompileMihomo_ModernRulesAndFailClosedValidation(t *testing.T) {
 			wantReason: "unsupported parameter",
 		},
 		{
+			name:       "DomainSuffixRule_NoResolveFailsClosed",
+			expression: "DOMAIN-SUFFIX,example.com,no-resolve",
+			wantReason: "unsupported parameter",
+		},
+		{
+			name:       "DomainSuffixRule_OtherParameterStillFailsClosed",
+			expression: "DOMAIN-SUFFIX,example.com,extended-matching",
+			wantReason: "unsupported parameter",
+		},
+		{
 			name:       "GeositeRule_UnknownParameterFailsClosed",
 			expression: "GEOSITE,cn,no-resolve",
 			wantReason: "unsupported parameter",
@@ -1185,4 +1210,3 @@ func TestMihomo_RejectsDanglingGroupReference(t *testing.T) {
 		t.Fatalf("expected CompileMihomo to fail on dangling group reference, got nil")
 	}
 }
-

@@ -46,6 +46,58 @@ describe('useGroupDraft Composable', () => {
     expect(draft.isDirty.value).toBe(true)
   })
 
+  it('initializes URL-Test settings, tracks edits, and serializes defaults and explicit zero', () => {
+    const draft = useGroupDraft()
+    draft.initDraft({
+      ...sampleGroup,
+      group_type: 'urltest',
+      urltest_interval: 45,
+      urltest_tolerance: 0,
+    })
+
+    expect(draft.urltestInterval.value).toBe(45)
+    expect(draft.urltestTolerance.value).toBe(0)
+    expect(draft.isDirty.value).toBe(false)
+
+    draft.urltestInterval.value = 60
+    expect(draft.isDirty.value).toBe(true)
+    expect(draft.checkDraftValidity()).toBe(true)
+    expect(draft.buildSavePayload()).toMatchObject({ urltest_interval: 60, urltest_tolerance: 0 })
+
+    draft.urltestInterval.value = ''
+    draft.urltestTolerance.value = ''
+    expect(draft.checkDraftValidity()).toBe(true)
+    expect(draft.buildSavePayload()).toMatchObject({ urltest_interval: 300, urltest_tolerance: 50 })
+  })
+
+  it('keeps explicit zero interval when reopening a URL-Test group', () => {
+    const draft = useGroupDraft()
+    draft.initDraft({ ...sampleGroup, group_type: 'urltest', urltest_interval: 0, urltest_tolerance: 0 })
+    expect(draft.urltestInterval.value).toBe(0)
+    expect(draft.buildSavePayload()).toMatchObject({ urltest_interval: 0, urltest_tolerance: 0 })
+    expect(draft.isDirty.value).toBe(false)
+  })
+
+  it('omits URL-Test settings after switching to a different group type', () => {
+    const draft = useGroupDraft()
+    draft.initDraft({ ...sampleGroup, group_type: 'urltest', urltest_interval: 30, urltest_tolerance: 10 })
+    draft.groupType.value = 'select'
+
+    expect(draft.buildSavePayload()).not.toHaveProperty('urltest_interval')
+    expect(draft.buildSavePayload()).not.toHaveProperty('urltest_tolerance')
+  })
+
+  it('rejects out-of-range or fractional URL-Test settings', () => {
+    const draft = useGroupDraft()
+    draft.initDraft({ ...sampleGroup, group_type: 'urltest' })
+
+    draft.urltestInterval.value = 86401
+    expect(draft.checkDraftValidity()).toBe(false)
+    draft.urltestInterval.value = 300
+    draft.urltestTolerance.value = 1.5
+    expect(draft.checkDraftValidity()).toBe(false)
+  })
+
   it('handles source pipeline manipulation with normalized positions', () => {
     const draft = useGroupDraft()
     draft.initDraft(sampleGroup)

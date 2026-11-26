@@ -52,6 +52,94 @@ describe('Rule draft persistence boundary', () => {
     expect(name.value).toBe('My draft')
   })
 
+  it('prevents adding no-resolve to a domain rule and preserves it on legal IP saves', async () => {
+    const save = vi.fn()
+    app = createApp({ render: () => h(RuleEditorModal, {
+      modelValue: true, rule: null, categories, groups: [], saving: false, onSave: save,
+    }) })
+    app.mount(container)
+    await nextTick()
+
+    const noResolve = container.querySelector('#rule-no-resolve-field') as HTMLInputElement
+    expect(noResolve.disabled).toBe(true)
+    expect(container.querySelector('[data-testid="rule-no-resolve-help"]')?.textContent).toContain('当前类型不支持')
+    const typeSelect = container.querySelector('#rule-type-select') as HTMLSelectElement
+    typeSelect.value = 'IP-CIDR'
+    typeSelect.dispatchEvent(new Event('change'))
+    await nextTick()
+    expect(noResolve.disabled).toBe(false)
+    const value = container.querySelector('#rule-expression-input') as HTMLInputElement
+    value.value = '192.0.2.0/24'
+    value.dispatchEvent(new Event('input'))
+    noResolve.click()
+    await nextTick()
+    container.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+    await nextTick()
+    expect(save).toHaveBeenCalledOnce()
+    expect(save.mock.calls[0][0].expression).toBe('IP-CIDR,192.0.2.0/24,no-resolve')
+  })
+
+  it('explains historical no-resolve misuse without rewriting it in the editor', async () => {
+    const save = vi.fn()
+    const rule: PolicyRuleView = {
+      id: 'legacy-invalid-rule',
+      revision_id: 'rev-test',
+      builtin_target: 'DIRECT',
+      expression: 'DOMAIN-SUFFIX,example.org,no-resolve',
+      position: 0,
+      enabled: true,
+    }
+    app = createApp({ render: () => h(RuleEditorModal, {
+      modelValue: true, rule, categories, groups: [], saving: false, onSave: save,
+    }) })
+    app.mount(container)
+    await nextTick()
+
+    const noResolve = container.querySelector('#rule-no-resolve-field') as HTMLInputElement
+    expect(noResolve).not.toBeNull()
+    expect(noResolve.checked).toBe(true)
+    expect(container.querySelector('[data-testid="rule-no-resolve-warning"]')?.textContent).toContain('请取消此选项')
+    container.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+    await nextTick()
+    expect(save).not.toHaveBeenCalled()
+    noResolve.click()
+    await nextTick()
+    expect(noResolve.checked).toBe(false)
+  })
+
+  it('keeps a preserved no-resolve option visible and removable after switching to MATCH', async () => {
+    const save = vi.fn()
+    const rule: PolicyRuleView = {
+      id: 'legacy-ip-rule',
+      revision_id: 'rev-test',
+      builtin_target: 'DIRECT',
+      expression: 'IP-CIDR,192.0.2.0/24,no-resolve',
+      position: 0,
+      enabled: true,
+    }
+    app = createApp({ render: () => h(RuleEditorModal, {
+      modelValue: true, rule, categories, groups: [], saving: false, onSave: save,
+    }) })
+    app.mount(container)
+    await nextTick()
+
+    const typeSelect = container.querySelector('#rule-type-select') as HTMLSelectElement
+    typeSelect.value = 'MATCH'
+    typeSelect.dispatchEvent(new Event('change'))
+    await nextTick()
+
+    const noResolve = container.querySelector('#rule-no-resolve-field') as HTMLInputElement
+    expect(noResolve).not.toBeNull()
+    expect(noResolve.checked).toBe(true)
+    noResolve.click()
+    await nextTick()
+    expect(noResolve.checked).toBe(false)
+    container.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }))
+    await nextTick()
+    expect(save).toHaveBeenCalledOnce()
+    expect(save.mock.calls[0][0].expression).toBe('MATCH')
+  })
+
   it('does not clear a category name before the parent acknowledges success', async () => {
     const create = vi.fn()
     app = createApp({ render: () => h(RuleCategoryModal, { modelValue: true, categories, saving: false, onCreateCategory: create }) })

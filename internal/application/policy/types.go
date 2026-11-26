@@ -22,6 +22,8 @@ type CreateGroupCommand struct {
 	ID                  string                 `json:"id,omitempty"`
 	Name                string                 `json:"name"`
 	GroupType           domain.GroupType       `json:"group_type"`
+	URLTestInterval     *int                   `json:"urltest_interval,omitempty"`
+	URLTestTolerance    *int                   `json:"urltest_tolerance,omitempty"`
 	Position            *int                   `json:"position,omitempty"`
 	Sources             []domain.MemberSource  `json:"sources,omitempty"`
 	Edges               []EdgeInput            `json:"edges,omitempty"`
@@ -37,6 +39,8 @@ type UpdateGroupCommand struct {
 	ID                  string                 `json:"id"`
 	Name                *string                `json:"name,omitempty"`
 	GroupType           *domain.GroupType      `json:"group_type,omitempty"`
+	URLTestInterval     *int                   `json:"urltest_interval,omitempty"`
+	URLTestTolerance    *int                   `json:"urltest_tolerance,omitempty"`
 	Position            *int                   `json:"position,omitempty"`
 	ExpectedRevision    *int64                 `json:"expected_revision,omitempty"`
 	Sources             *[]domain.MemberSource `json:"sources,omitempty"`
@@ -86,6 +90,8 @@ type GroupView struct {
 	ID                  string                 `json:"id"`
 	Name                string                 `json:"name"`
 	GroupType           domain.GroupType       `json:"group_type"`
+	URLTestInterval     *int                   `json:"urltest_interval,omitempty"`
+	URLTestTolerance    *int                   `json:"urltest_tolerance,omitempty"`
 	Position            int                    `json:"position"`
 	Revision            int64                  `json:"revision"`
 	Sources             []domain.MemberSource  `json:"sources"`
@@ -109,6 +115,8 @@ type GroupPreviewResult struct {
 
 // PreviewGroupCommand defines parameters for in-RAM preview of a policy group.
 type PreviewGroupCommand struct {
+	URLTestInterval     *int                   `json:"urltest_interval,omitempty"`
+	URLTestTolerance    *int                   `json:"urltest_tolerance,omitempty"`
 	GroupID             *string                `json:"group_id,omitempty"`
 	ExpectedRevision    *int64                 `json:"expected_revision,omitempty"`
 	Name                *string                `json:"name,omitempty"`

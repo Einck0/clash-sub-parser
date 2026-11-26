@@ -65,6 +65,8 @@ const emit = defineEmits<{
     position?: number
     emptyFallbackPass: boolean
     inheritGlobalFilter: boolean
+    urltest_interval?: number
+    urltest_tolerance?: number
     sources: MemberSource[]
     expectedRevision?: number
   }): void
@@ -128,6 +130,12 @@ function getPreviewPayload(): GroupDraftPreviewPayload {
     name: draft.name.value.trim(),
     group_type: draft.groupType.value,
     inherit_global_filter: draft.inheritGlobalFilter.value,
+    ...(draft.groupType.value === 'urltest'
+      ? {
+          urltest_interval: draft.urltestInterval.value === '' ? 300 : draft.urltestInterval.value,
+          urltest_tolerance: draft.urltestTolerance.value === '' ? 50 : draft.urltestTolerance.value,
+        }
+      : {}),
     sources: draft.sources.value.map((s, idx) => ({ ...s, position: idx })),
     target: 'mihomo',
   }
@@ -167,6 +175,8 @@ watch(
     draft.groupType.value,
     draft.emptyFallbackPass.value,
     draft.inheritGlobalFilter.value,
+    draft.urltestInterval.value,
+    draft.urltestTolerance.value,
     draft.sources.value.length,
     draft.sources.value,
   ],
@@ -430,6 +440,40 @@ function handleDiscardSourceDraft() {
             class="lg:col-span-7 space-y-4 min-w-0"
             :class="{ 'hidden lg:block': activeSheetTab !== 'editor' }"
           >
+            <section
+              v-if="draft.groupType.value === 'urltest'"
+              data-testid="urltest-settings"
+              class="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-base-300 bg-base-200/60 p-3"
+            >
+              <label class="flex flex-col gap-1">
+                <span class="text-xs font-semibold">{{ uiText('测速间隔（秒）', 'Test interval (seconds)') }}</span>
+                <input
+                  :value="draft.urltestInterval.value"
+                  type="number"
+                  min="0"
+                  max="86400"
+                  step="1"
+                  class="input input-sm"
+                  data-testid="urltest-interval-input"
+                  @input="draft.urltestInterval.value = ($event.target as HTMLInputElement).value === '' ? '' : Number(($event.target as HTMLInputElement).value)"
+                />
+                <span class="text-[11px] opacity-70">{{ uiText('留空使用默认值 300 秒；0 停止定时测速；最大 86400 秒。', 'Blank uses the 300-second default; 0 disables periodic tests; maximum 86400 seconds.') }}</span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-xs font-semibold">{{ uiText('容忍抖动（毫秒）', 'Tolerance (milliseconds)') }}</span>
+                <input
+                  :value="draft.urltestTolerance.value"
+                  type="number"
+                  min="0"
+                  max="60000"
+                  step="1"
+                  class="input input-sm"
+                  data-testid="urltest-tolerance-input"
+                  @input="draft.urltestTolerance.value = ($event.target as HTMLInputElement).value === '' ? '' : Number(($event.target as HTMLInputElement).value)"
+                />
+                <span class="text-[11px] opacity-70">{{ uiText('默认值 50 毫秒；0 表示不容忍抖动。', 'Defaults to 50 milliseconds; 0 disables tolerance.') }}</span>
+              </label>
+            </section>
             <SourcePipelineEditor
               v-model:name="draft.name.value"
               v-model:group-type="draft.groupType.value"

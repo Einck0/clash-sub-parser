@@ -132,6 +132,12 @@ openssl rand -hex 32
 
 当前节点范围包含无订阅来源证据的活跃手工节点，或经 `manual_confirmed` 明确确认的恢复资产。刷新移除关系的订阅节点仍保留在台账，但不会因失去来源边而被误认为手工节点。
 
+## URL-Test 策略组测速配置
+
+在自动测速（`urltest`）策略组编辑器中设置测速间隔（秒）与容忍抖动（毫秒）。这些设置控制 Mihomo 客户端的 URL-Test，而非 CSP 探针超时；测速 URL 保持 `https://www.gstatic.com/generate_204`。
+
+管理 API 的策略组新增、更新和草稿预览支持 `urltest_interval` 与 `urltest_tolerance` 整数字段，例如 `{"group_type":"urltest","urltest_interval":120,"urltest_tolerance":20}`。间隔范围为 `0..86400` 秒，`0` 按 Mihomo 语义停止定时测速；容忍抖动范围为 `0..60000` 毫秒，`0` 不容忍抖动。未设置或历史数据沿用 300 秒与 50 毫秒，编辑器留空恢复这两个默认值。更新时省略字段保留原值；切换为其他策略组类型时清除 URL-Test 专属配置，其他客户端仍按原有节点导出语义处理。
+
 ## 本地开发与测试
 
 ### 单二进制运行

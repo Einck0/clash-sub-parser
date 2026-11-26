@@ -2250,3 +2250,137 @@ func TestPolicyService_CreatePolicyRule_CategorizedModeWithExistingMATCH(t *test
 		t.Fatalf("expected invalid_match_rule_ordering error, got: %v", err)
 	}
 }
+
+func TestPolicyService_RuleParameterValidationAndHistoricalReadback(t *testing.T) {
+	ctx := context.Background()
+	db := setupTestDB(t)
+	policyRepo := sqlite.NewPolicyRepository(db)
+	revRepo := sqlite.NewRevisionRepository(db)
+	svc := policy.NewService(policyRepo, revRepo, sqlite.NewNodeRepository(db), sqlite.NewAuditRepository(db))
+
+	group, err := svc.CreateGroup(ctx, policy.CreateGroupCommand{
+		Name:      "Rule Validation Target",
+		GroupType: domain.GroupTypeSelect,
+		RequestID: "req-rule-validation-group",
+		ActorKind: domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to create rule target group: %v", err)
+	}
+	active, err := svc.EnsureActiveRevision(ctx)
+	if err != nil || active == nil {
+		t.Fatalf("failed to create active revision: %v", err)
+	}
+
+	_, err = svc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+		RevisionID:    active.ID,
+		TargetGroupID: group.ID,
+		Expression:    "DOMAIN-SUFFIX,blocked.example,no-resolve",
+		Position:      0,
+		RequestID:     "req-rule-validation-create",
+		ActorKind:     domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatal("expected DOMAIN-SUFFIX no-resolve create to be rejected")
+	}
+	if domErr, ok := domain.AsDomainError(err); !ok || domErr.Code != "unsupported_rule_parameter" {
+		t.Fatalf("expected unsupported_rule_parameter from create, got %v", err)
+	}
+	createdRules, err := svc.ListRules(ctx, policy.ListRulesQuery{RevisionID: active.ID})
+	if err != nil {
+		t.Fatalf("failed to read rules after rejected create: %v", err)
+	}
+	if len(createdRules.PolicyRules) != 0 {
+		t.Fatalf("rejected create persisted %d rules", len(createdRules.PolicyRules))
+	}
+
+	valid, err := svc.CreatePolicyRule(ctx, policy.CreatePolicyRuleCommand{
+		RevisionID:    active.ID,
+		TargetGroupID: group.ID,
+		Expression:    "IP-CIDR,192.0.2.0/24,no-resolve",
+		Position:      0,
+		RequestID:     "req-rule-validation-ip",
+		ActorKind:     domain.ActorKindAdmin,
+	})
+	if err != nil {
+		t.Fatalf("expected legal IP no-resolve rule to save: %v", err)
+	}
+	if valid.Expression != "IP-CIDR,192.0.2.0/24,no-resolve" {
+		t.Fatalf("unexpected saved IP expression: %q", valid.Expression)
+	}
+
+	invalidExpression := "DOMAIN-SUFFIX,changed.example,no-resolve"
+	_, err = svc.UpdatePolicyRule(ctx, policy.UpdatePolicyRuleCommand{
+		ID:         valid.ID,
+		Expression: &invalidExpression,
+		RequestID:  "req-rule-validation-update",
+		ActorKind:  domain.ActorKindAdmin,
+	})
+	if err == nil {
+		t.Fatal("expected DOMAIN-SUFFIX no-resolve update to be rejected")
+	}
+	if domErr, ok := domain.AsDomainError(err); !ok || domErr.Code != "unsupported_rule_parameter" {
+		t.Fatalf("expected unsupported_rule_parameter from update, got %v", err)
+	}
+
+	readback, err := svc.ListRules(ctx, policy.ListRulesQuery{RevisionID: active.ID})
+	if err != nil {
+		t.Fatalf("failed to read saved rules: %v", err)
+	}
+	if len(readback.PolicyRules) != 1 || readback.PolicyRules[0].Expression != "IP-CIDR,192.0.2.0/24,no-resolve" {
+		t.Fatalf("valid IP rule was not preserved after rejected update: %+v", readback.PolicyRules)
+	}
+
+	historical := &domain.PolicyRule{
+		ID:            "legacy-invalid-rule",
+		RevisionID:    active.ID,
+		TargetGroupID: group.ID,
+		Expression:    "DOMAIN-SUFFIX,legacy.example,no-resolve",
+		Position:      1,
+		Enabled:       true,
+	}
+	if err := policyRepo.CreatePolicyRule(ctx, historical); err != nil {
+		t.Fatalf("failed to insert historical invalid rule fixture: %v", err)
+	}
+
+	historicalReadback, err := svc.ListRules(ctx, policy.ListRulesQuery{RevisionID: active.ID})
+	if err != nil {
+		t.Fatalf("failed to read historical invalid rule: %v", err)
+	}
+	if len(historicalReadback.PolicyRules) != 2 || historicalReadback.PolicyRules[1].Expression != historical.Expression {
+		t.Fatalf("historical expression was rewritten or reordered: %+v", historicalReadback.PolicyRules)
+	}
+
+	validation, validationErr := svc.ValidateGraph(ctx)
+	if validationErr == nil || validation == nil || validation.Valid {
+		t.Fatalf("expected ValidateGraph to diagnose historical invalid rule, result=%+v err=%v", validation, validationErr)
+	}
+	if !strings.Contains(validationErr.Error(), "DOMAIN-SUFFIX rules do not support no-resolve") {
+		t.Fatalf("unexpected historical validation error: %v", validationErr)
+	}
+
+	historicalAfterValidation, err := svc.ListRules(ctx, policy.ListRulesQuery{RevisionID: active.ID})
+	if err != nil {
+		t.Fatalf("failed to reread historical invalid rule: %v", err)
+	}
+	if historicalAfterValidation.PolicyRules[1].Expression != historical.Expression {
+		t.Fatalf("validation rewrote historical expression: %q", historicalAfterValidation.PolicyRules[1].Expression)
+	}
+
+	// Quarantine is a safe correction path and must not require editing the stored value.
+	disabled := false
+	if _, err := svc.UpdatePolicyRule(ctx, policy.UpdatePolicyRuleCommand{ID: historical.ID, Enabled: &disabled}); err != nil {
+		t.Fatalf("cannot quarantine historical invalid rule: %v", err)
+	}
+	stored, err := policyRepo.GetPolicyRule(ctx, historical.ID)
+	if err != nil || stored.Enabled || stored.Expression != historical.Expression {
+		t.Fatalf("quarantine rewrote historical record: %+v, %v", stored, err)
+	}
+	enabled := true
+	if _, err := svc.UpdatePolicyRule(ctx, policy.UpdatePolicyRuleCommand{ID: historical.ID, Enabled: &enabled}); err == nil {
+		t.Fatal("re-enabling historical invalid rule must fail")
+	}
+	if _, err := svc.UpdatePolicyRule(ctx, policy.UpdatePolicyRuleCommand{ID: historical.ID, Expression: &invalidExpression, Enabled: &disabled}); err == nil {
+		t.Fatal("submitting an invalid expression must fail even when disabled")
+	}
+}

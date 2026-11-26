@@ -129,6 +129,12 @@ Subscription `prefix` is a top-level field, not part of advanced `config`. Savin
 
 Current inventory includes active manual nodes without subscription-origin evidence, or explicitly manual-confirmed recovery. A refresh-pruned subscription asset remains in the ledger, but does not become a manual node merely because its source edge was removed.
 
+## URL-Test group measurements
+
+The `urltest` group editor offers measurement interval (seconds) and switch tolerance (milliseconds). These are Mihomo client URL-Test settings, not the CSP probe timeout. The existing test URL remains `https://www.gstatic.com/generate_204`.
+
+Group create, update and draft-preview APIs accept integer `urltest_interval` and `urltest_tolerance`, for example `{"group_type":"urltest","urltest_interval":120,"urltest_tolerance":20}`. Interval accepts `0..86400` seconds; explicit `0` disables periodic testing as in Mihomo. Tolerance accepts `0..60000` milliseconds; explicit `0` disables tolerance. Unset fields and historical groups retain the 300-second / 50-millisecond defaults; blank editor inputs restore those defaults. Omitted update fields preserve saved values. Switching to another group type clears URL-Test-only settings; other client targets retain their existing node-only export semantics.
+
 ## Local Development & Testing
 
 ### Standalone Go Server

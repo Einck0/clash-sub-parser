@@ -14,6 +14,7 @@ import (
 	"clash-sub-parser/internal/domain"
 	"clash-sub-parser/internal/parser"
 	"clash-sub-parser/internal/resolver"
+	"gopkg.in/yaml.v3"
 )
 
 func findMihomoBinary() string {
@@ -298,9 +299,28 @@ func TestCompiler_DerivedProjectedGroupsAcrossAllTargets(t *testing.T) {
 		DNS: resolver.DNSConfig{Enabled: true, Nameservers: []string{"1.1.1.1"}},
 	}
 
+	interval, tolerance := 75, 0
+	input.Groups[1].GroupType = domain.GroupTypeURLTest
+	input.Groups[1].URLTestInterval = &interval
+	input.Groups[1].URLTestTolerance = &tolerance
 	snap, err := r.Resolve(ctx, input)
 	if err != nil {
 		t.Fatalf("resolve failed: %v", err)
+	}
+	foundDerived := false
+	for _, group := range snap.Groups {
+		if group.Name == "Auto [Proxy]" {
+			foundDerived = true
+			if group.GroupType != domain.GroupTypeURLTest || group.URLTestInterval == nil || *group.URLTestInterval != interval || group.URLTestTolerance == nil || *group.URLTestTolerance != tolerance {
+				t.Fatalf("derived group lost URL-Test settings: %+v", group)
+			}
+			if len(group.Members) != 1 || group.Members[0].TargetID != n1.LogicalID {
+				t.Fatalf("fixture did not exercise filtered group-ref: %+v", group.Members)
+			}
+		}
+	}
+	if !foundDerived {
+		t.Fatal("filtered URL-Test derived group was not created")
 	}
 
 	for _, target := range compiler.Targets() {
@@ -312,8 +332,28 @@ func TestCompiler_DerivedProjectedGroupsAcrossAllTargets(t *testing.T) {
 			out := string(res.Content)
 
 			if target == domain.TargetMihomo {
-				if !strings.Contains(out, "Auto [Proxy]") {
-					t.Errorf("expected target %s output to contain derived group 'Auto [Proxy]', got:\n%s", target, out)
+				var config struct {
+					Groups []struct {
+						Name      string `yaml:"name"`
+						Type      string `yaml:"type"`
+						Interval  *int   `yaml:"interval"`
+						Tolerance *int   `yaml:"tolerance"`
+					} `yaml:"proxy-groups"`
+				}
+				if err := yaml.Unmarshal(res.Content, &config); err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, group := range config.Groups {
+					if group.Name == "Auto [Proxy]" {
+						found = true
+						if group.Type != "url-test" || group.Interval == nil || *group.Interval != interval || group.Tolerance == nil || *group.Tolerance != tolerance {
+							t.Fatalf("derived group export reverted to defaults: %+v", group)
+						}
+					}
+				}
+				if !found {
+					t.Fatal("Mihomo export omitted the filtered URL-Test group")
 				}
 			} else {
 				if strings.Contains(out, "Auto [Proxy]") {

@@ -348,6 +348,41 @@ describe('usePolicy composable', () => {
     expect(groups.value[0].edges).toHaveLength(1)
   })
 
+  it('serializes URL-Test settings for create and update while omitting them for other groups', async () => {
+    const postSpy = vi.spyOn(api, 'post').mockResolvedValue({ id: 'urltest', name: 'Auto', group_type: 'urltest', sources: [] })
+    vi.spyOn(api, 'get').mockImplementation(async (path) => path.endsWith('/groups') ? { items: [], total: 0 } : { spec: { conditions: [] } })
+    const policy = usePolicy()
+
+    await policy.createGroup({ name: 'Auto', group_type: 'urltest', urltest_interval: 120, urltest_tolerance: 0, sources: [] })
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/groups', expect.objectContaining({
+      urltest_interval: 120,
+      urltest_tolerance: 0,
+    }))
+
+    const putSpy = vi.spyOn(api, 'put').mockResolvedValue({ id: 'urltest', name: 'Auto', group_type: 'select', sources: [] })
+    await policy.updateGroup('urltest', { urltest_interval: 0, urltest_tolerance: 0 })
+    expect(putSpy).toHaveBeenLastCalledWith('/api/v1/policies/groups/urltest', { urltest_interval: 0, urltest_tolerance: 0 })
+    await policy.updateGroup('urltest', { group_type: 'urltest', name: 'renamed' })
+    expect(putSpy).toHaveBeenLastCalledWith('/api/v1/policies/groups/urltest', { group_type: 'urltest', name: 'renamed' })
+    await policy.updateGroup('urltest', { group_type: 'select', sources: [] })
+    expect(putSpy).toHaveBeenCalledWith('/api/v1/policies/groups/urltest', expect.not.objectContaining({
+      urltest_interval: expect.anything(),
+      urltest_tolerance: expect.anything(),
+    }))
+  })
+
+  it('serializes URL-Test defaults when settings are unset', async () => {
+    const postSpy = vi.spyOn(api, 'post').mockResolvedValue({ id: 'urltest', name: 'Auto', group_type: 'urltest', sources: [] })
+    vi.spyOn(api, 'get').mockImplementation(async (path) => path.endsWith('/groups') ? { items: [], total: 0 } : { spec: { conditions: [] } })
+    const policy = usePolicy()
+
+    await policy.createGroup({ name: 'Auto', group_type: 'urltest', sources: [] })
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/policies/groups', expect.objectContaining({
+      urltest_interval: 300,
+      urltest_tolerance: 50,
+    }))
+  })
+
   it('creates a new policy group via POST /api/v1/policies/groups', async () => {
     const mockCreated: PolicyGroup = {
       id: 'grp-new',

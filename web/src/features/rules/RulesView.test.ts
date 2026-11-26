@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick } from 'vue'
 import RulesView from './RulesView.vue'
 import { api } from '../../api/client'
+import { getLocale, setLocale } from '../../locales'
 import type { RuleCategory, PolicyRuleView } from './rulesTypes'
 
 describe('RulesView Component', () => {
@@ -172,6 +173,40 @@ describe('RulesView Component', () => {
 
     expect(container.textContent).toContain('openai.com')
     expect(container.textContent).not.toContain('10.0.0.0/8')
+  })
+
+  it.each(['zh-CN', 'en-US'] as const)('keeps the rules toolbar flowable with %s counts', async (locale) => {
+    const previousLocale = getLocale()
+    setLocale(locale)
+    try {
+      await mountRulesView()
+
+      const toolbarControls = container.querySelector('[data-testid="toolbar-controls"]') as HTMLElement
+      expect(toolbarControls).not.toBeNull()
+      expect(toolbarControls.classList.contains('sm:flex-[1_1_20rem]')).toBe(true)
+
+      const searchRow = toolbarControls.firstElementChild as HTMLElement
+      expect(searchRow).not.toBeNull()
+      expect(searchRow.classList.contains('flex-wrap')).toBe(true)
+      expect(searchRow.classList.contains('min-w-0')).toBe(true)
+
+      const searchInput = container.querySelector('#rules-search-input') as HTMLInputElement
+      expect(searchInput).not.toBeNull()
+      expect(searchInput.classList.contains('w-full')).toBe(true)
+      expect(searchInput.parentElement?.classList.contains('flex-[1_1_12rem]')).toBe(true)
+      expect(searchInput.parentElement?.classList.contains('min-w-0')).toBe(true)
+      expect(searchInput.parentElement?.classList.contains('min-w-[200px]')).toBe(false)
+
+      const countRegion = searchInput.parentElement?.nextElementSibling as HTMLElement
+      expect(countRegion).not.toBeNull()
+      expect(countRegion.textContent).toContain(locale === 'en-US' ? '3 categories' : '3 分类')
+      expect(countRegion.classList.contains('flex-wrap')).toBe(true)
+      expect(countRegion.classList.contains('shrink-0')).toBe(true)
+      expect(countRegion.classList.contains('min-w-0')).toBe(true)
+      expect(countRegion.classList.contains('max-w-full')).toBe(true)
+    } finally {
+      setLocale(previousLocale)
+    }
   })
 
   it('validates rules topology when clicking validate button', async () => {

@@ -52,7 +52,7 @@ describe('PageToolbar Component', () => {
     const h2 = container.querySelector('[data-testid="toolbar-title"]')
     const titleRegion = h2?.parentElement
     expect(titleRegion?.classList.contains('basis-full')).toBe(true)
-    expect(titleRegion?.classList.contains('sm:flex-1')).toBe(true)
+    expect(titleRegion?.classList.contains('sm:flex-[1_1_16rem]')).toBe(true)
     expect(h2).toBeTruthy()
     expect(h2?.textContent?.trim()).toBe('Node Ledger')
 
@@ -61,12 +61,13 @@ describe('PageToolbar Component', () => {
     expect(desc?.classList.contains('truncate')).toBe(false)
     const controls = container.querySelector('[data-testid="toolbar-controls"]')
     expect(controls?.classList.contains('basis-full')).toBe(true)
-    expect(controls?.classList.contains('sm:flex-1')).toBe(true)
+    expect(controls?.classList.contains('sm:flex-[1_1_20rem]')).toBe(true)
 
     const actions = container.querySelector('[data-testid="toolbar-actions"]')
     expect(actions?.classList.contains('flex-wrap')).toBe(true)
     expect(actions?.classList.contains('basis-full')).toBe(true)
-    expect(actions?.classList.contains('sm:basis-auto')).toBe(true)
+    expect(actions?.classList.contains('min-w-0')).toBe(true)
+    expect(actions?.classList.contains('sm:flex-[0_1_auto]')).toBe(true)
     expect(actions?.classList.contains('sm:ml-auto')).toBe(true)
 
     // Verify slots

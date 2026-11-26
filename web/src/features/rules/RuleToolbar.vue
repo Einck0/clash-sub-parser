@@ -50,9 +50,9 @@ function clearSearch() {
 <template>
   <PageToolbar :title="t('rules.title')" :description="uiText('查找、排序和启停路由规则。停用项保留在此处，但不参与实际导出。', 'Find, order and toggle routing rules. Disabled rules stay editable here but are excluded from exports.')">
     <!-- Default Slot: Search & Small Counts in one cohesive bar -->
-    <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full max-w-xl">
+    <div class="flex flex-wrap items-stretch gap-3 w-full max-w-xl min-w-0">
       <!-- Search Input -->
-      <div class="relative flex-1 min-w-[200px]">
+      <div class="relative flex-[1_1_12rem] min-w-0">
         <label for="rules-search-input" class="sr-only">{{ t('rules.searchPlaceholder') }}</label>
         <MagnifyingGlassIcon class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40 pointer-events-none" />
         <input
@@ -75,7 +75,7 @@ function clearSearch() {
       </div>
 
       <!-- Small Inline Counts -->
-      <div class="flex items-center gap-2 text-xs text-base-content/70 shrink-0 select-none px-1">
+      <div class="flex flex-wrap items-center gap-2 text-xs text-base-content/70 shrink-0 min-w-0 max-w-full select-none px-1">
         <span v-if="loading" class="loading loading-spinner loading-xs text-primary"></span>
         <template v-else-if="isSearching">
           <span class="badge badge-sm badge-neutral font-mono">

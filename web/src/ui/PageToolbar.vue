@@ -19,7 +19,7 @@ withDefaults(
     data-testid="page-toolbar"
   >
     <!-- Left: Optional Title / Description (non-redundant heading) -->
-    <div v-if="title || description" class="min-w-0 basis-full sm:flex-1">
+    <div v-if="title || description" class="min-w-0 basis-full sm:flex-[1_1_16rem]">
       <h1 v-if="srOnlyTitle && title" class="sr-only">{{ title }}</h1>
       <h2
         v-else-if="title"
@@ -40,7 +40,7 @@ withDefaults(
     <!-- Center/Default: Page controls, filters, search -->
     <div
       v-if="$slots.default"
-      class="flex flex-wrap items-center gap-2 min-w-0 basis-full sm:flex-1"
+      class="flex flex-wrap items-center gap-2 min-w-0 basis-full sm:flex-[1_1_20rem]"
       data-testid="toolbar-controls"
     >
       <slot />
@@ -49,7 +49,7 @@ withDefaults(
     <!-- Right: Page actions -->
     <div
       v-if="$slots.actions"
-      class="flex flex-wrap items-center gap-2 max-w-full basis-full ml-0 sm:basis-auto sm:ml-auto"
+      class="flex flex-wrap items-center gap-2 max-w-full min-w-0 basis-full ml-0 sm:flex-[0_1_auto] sm:ml-auto"
       data-testid="toolbar-actions"
     >
       <slot name="actions" />

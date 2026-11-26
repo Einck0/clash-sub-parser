@@ -53,7 +53,7 @@ func TestGlobalEmptyPassPersistsAndFreshStorageIsReady(t *testing.T) {
 	if err := sqlite.CheckSubscriptionStorageReady(ctx, db); err != nil {
 		t.Fatalf("fresh migrated database must satisfy subscription storage readiness: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version,name,applied_at) VALUES(33,'unknown','2026-11-15T00:00:00Z')`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version,name,applied_at) VALUES(34,'unknown','2026-11-15T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := sqlite.CheckSubscriptionStorageReady(ctx, db); err == nil {

@@ -67,16 +67,16 @@ func TestGlobalEmptyPassStartupUpgradesSealedSchema30(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startup upgrade from sealed schema 30: %v", err)
 	}
-	assertStartupSchemaAndDefault(upgraded, 32)
+	assertStartupSchemaAndDefault(upgraded, 33)
 	if err := upgraded.Close(); err != nil {
 		t.Fatalf("close upgraded database: %v", err)
 	}
 
 	reopened, err := sqlite.OpenAndMigrate(ctx, cfg)
 	if err != nil {
-		t.Fatalf("startup reopen at schema 32: %v", err)
+		t.Fatalf("startup reopen at schema 33: %v", err)
 	}
-	assertStartupSchemaAndDefault(reopened, 32)
+	assertStartupSchemaAndDefault(reopened, 33)
 	if err := reopened.Close(); err != nil {
 		t.Fatalf("close reopened database: %v", err)
 	}

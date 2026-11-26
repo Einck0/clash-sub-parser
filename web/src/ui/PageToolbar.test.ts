@@ -50,13 +50,24 @@ describe('PageToolbar Component', () => {
     expect(h1).toBeNull()
 
     const h2 = container.querySelector('[data-testid="toolbar-title"]')
+    const titleRegion = h2?.parentElement
+    expect(titleRegion?.classList.contains('basis-full')).toBe(true)
+    expect(titleRegion?.classList.contains('sm:flex-1')).toBe(true)
     expect(h2).toBeTruthy()
     expect(h2?.textContent?.trim()).toBe('Node Ledger')
 
     const desc = container.querySelector('[data-testid="toolbar-description"]')
     expect(desc?.textContent?.trim()).toBe('Overview of all node probes and protocols')
     expect(desc?.classList.contains('truncate')).toBe(false)
-    expect(container.querySelector('[data-testid="toolbar-actions"]')?.classList.contains('flex-wrap')).toBe(true)
+    const controls = container.querySelector('[data-testid="toolbar-controls"]')
+    expect(controls?.classList.contains('basis-full')).toBe(true)
+    expect(controls?.classList.contains('sm:flex-1')).toBe(true)
+
+    const actions = container.querySelector('[data-testid="toolbar-actions"]')
+    expect(actions?.classList.contains('flex-wrap')).toBe(true)
+    expect(actions?.classList.contains('basis-full')).toBe(true)
+    expect(actions?.classList.contains('sm:basis-auto')).toBe(true)
+    expect(actions?.classList.contains('sm:ml-auto')).toBe(true)
 
     // Verify slots
     expect(container.querySelector('[data-testid="search-input"]')).toBeTruthy()

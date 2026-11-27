@@ -389,20 +389,26 @@ defineExpose({ requestClose, confirmNavigation })
             {{ speedBadge.label }}
           </span>
         </div>
-        <div class="grid grid-cols-2 gap-2 text-[11px]">
+        <div
+          data-testid="node-platform-matrix"
+          class="grid gap-2 text-[11px] [grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr))]"
+        >
           <div
             v-for="badge in [
               ...getNodePlatformBadges(node, 'streaming'),
               ...getNodePlatformBadges(node, 'ai'),
             ]"
             :key="`matrix-${badge.platform}`"
-            class="flex items-center justify-between p-2 rounded-lg bg-base-100 border border-base-300"
+            data-testid="node-platform-matrix-item"
+            class="flex min-w-0 flex-col items-start gap-2 p-2 rounded-lg bg-base-100 border border-base-300"
           >
-            <div class="min-w-0 pr-1">
-              <span class="font-medium block truncate">{{ badge.platform.toUpperCase() }}</span>
-              <span v-if="badge.subTier" class="text-[10px] opacity-60 block truncate">{{ badge.subTier }}</span>
+            <div data-testid="node-platform-matrix-metadata" class="min-w-0 w-full whitespace-normal [overflow-wrap:anywhere]">
+              <span class="font-medium block">{{ badge.platform.toUpperCase() }}</span>
+              <span v-if="badge.subTier" class="text-[10px] opacity-60 block">{{ badge.subTier }}</span>
             </div>
             <StatusBadge
+              class="min-w-0 max-w-full text-left [overflow-wrap:anywhere]"
+              style="white-space: normal"
               :label="badge.label"
               :tone="badge.tone"
               :title="badge.tooltip"

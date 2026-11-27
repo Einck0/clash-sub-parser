@@ -690,17 +690,18 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       }
     })
 
-    it('qualifies non-current platform evidence in list expansion and both drawer locations', async () => {
+    it('qualifies non-current evidence and preserves wrapping matrix metadata in both locales', async () => {
       const claude: PlatformCapability = {
         verdict: 'available', sub_tier: 'unlocked', region: 'US', exit_region: 'US',
         reason: 'claude_available', region_source: 'cdn_trace', evidence_scope: 'cdn_trace',
         summary: 'CDN trace region (US); account/chat eligibility unverified',
       }
+      const unknownPlatform = `future_platform_${'x'.repeat(80)}`
       const node: NodeRecord = {
         ...subcheckFixtureNodes.aiFull,
         health_status: 'unknown',
         capabilities: {
-          ai: { verdict: 'available', stale: true, platforms: { claude } },
+          ai: { verdict: 'available', stale: true, platforms: { claude, [unknownPlatform]: { verdict: 'available', sub_tier: 'reachable', region: 'US' } } },
           streaming: { verdict: 'available', stale: false, platforms: { netflix: { verdict: 'available', region: 'US' } } },
         },
       }
@@ -752,6 +753,39 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         // Both the top capability row and the platform matrix share the projection.
         for (const badge of platformBadges(drawer, 'CLAUDE')) assertQualified(badge, ' · 非当前记录', expectedZH)
 
+        // jsdom cannot prove geometry. Protect the container-sized grid,
+        // stacked metadata and local nowrap override used by real browser checks.
+        const assertMatrixLayout = () => {
+          const matrix = drawer.querySelector<HTMLElement>('[data-testid="node-platform-matrix"]')!
+          expect(matrix.classList.contains('[grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr))]')).toBe(true)
+          expect(matrix.classList.contains('grid-cols-2')).toBe(false)
+          const items = matrix.querySelectorAll<HTMLElement>('[data-testid="node-platform-matrix-item"]')
+          const expected = [...getNodePlatformBadges(node, 'streaming'), ...getNodePlatformBadges(node, 'ai')]
+          expect(items).toHaveLength(3)
+          for (const [index, item] of Array.from(items).entries()) {
+            expect(item.classList.contains('flex-col')).toBe(true)
+            expect(item.classList.contains('min-w-0')).toBe(true)
+            const metadata = item.querySelector<HTMLElement>('[data-testid="node-platform-matrix-metadata"]')!
+            expect(metadata.children[0].textContent).toBe(expected[index].platform.toUpperCase())
+            if (expected[index].subTier) expect(metadata.children[1].textContent).toBe(expected[index].subTier)
+            expect(metadata.classList.contains('w-full')).toBe(true)
+            expect(metadata.classList.contains('[overflow-wrap:anywhere]')).toBe(true)
+            expect(metadata.querySelector('.truncate, .hidden, .overflow-hidden')).toBeNull()
+            const badge = item.querySelector<HTMLElement>('.badge')!
+            expect(badge.textContent?.trim()).toBe(expected[index].label)
+            expect(badge.title).toBe(expected[index].tooltip)
+            expect(badge.style.whiteSpace).toBe('normal')
+            expect(badge.classList.contains('max-w-full')).toBe(true)
+            expect(badge.classList.contains('[overflow-wrap:anywhere]')).toBe(true)
+            expect(badge.classList.contains('truncate')).toBe(false)
+            expect(badge.classList.contains('overflow-hidden')).toBe(false)
+          }
+          expect(matrix.textContent).toContain(unknownPlatform.toUpperCase())
+          expect(matrix.textContent).toContain('unlocked')
+          expect(matrix.textContent).toContain('reachable')
+        }
+        assertMatrixLayout()
+
         setLocale('en-US')
         await nextTick()
         const expectedEN = getNodePlatformBadges(node, 'ai')[0].tooltip!
@@ -759,6 +793,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
         const englishBadges = [...platformBadges(expanded, 'CLAUDE'), ...platformBadges(drawer, 'CLAUDE')]
         expect(englishBadges).toHaveLength(3)
         for (const badge of englishBadges) assertQualified(badge, ' · Recorded (not current)', expectedEN)
+        assertMatrixLayout()
         expect(JSON.stringify(node)).toBe(original)
         // History evidence formatting is deliberately not changed by node staleness.
         expect(formatPlatformBadge('claude', claude).tone).toBe('success')

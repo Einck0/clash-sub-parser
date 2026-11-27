@@ -323,7 +323,9 @@ func TestCheckClaude(t *testing.T) {
 
 	// Available in US
 	clientUS := mockClient(func(req *http.Request) (*http.Response, error) {
-		return htmlResponse(200, "loc=US\nip=1.2.3.4\n")
+		resp, err := htmlResponse(200, "loc=US\nip=1.2.3.4\n")
+		resp.Request = req
+		return resp, err
 	})
 	cap := platform.CheckClaude(ctx, clientUS)
 	if cap.Verdict != domain.VerdictAvailable || cap.SubTier != "unlocked" || cap.Region != "US" {
@@ -332,7 +334,9 @@ func TestCheckClaude(t *testing.T) {
 
 	// Blocked in CN
 	clientCN := mockClient(func(req *http.Request) (*http.Response, error) {
-		return htmlResponse(200, "loc=CN\nip=1.2.3.4\n")
+		resp, err := htmlResponse(200, "loc=CN\nip=1.2.3.4\n")
+		resp.Request = req
+		return resp, err
 	})
 	cap = platform.CheckClaude(ctx, clientCN)
 	if cap.Verdict != domain.VerdictRestricted || cap.SubTier != "banned" || cap.Region != "CN" {

@@ -1341,3 +1341,7 @@ This scoped clarification changes no public Check signature, storage shape, aggr
 ## Current continuation — 2026-11-07 run175745
 
 See [current continuation contract](continuation-175745.md) for latest precedence: untested node health is unknown, prior probe repair and official/prior-art research retained, and exhausted-rule primary-subscription fallback with explicit safety exclusions. Implementation and same-SHA cloud/review remain unverified until recorded evidence; old checked tasks do not certify this run. No production deployment.
+
+## Claude trace evidence refinement — 2026-11-27
+
+[Complete bounded Claude trace evidence](claude-trace-evidence-20261127.md) refines HR-259 and STATE-R1/R5: complete 256 KiB trace responses, exact consistent known alpha-2 loc fields, explicit overflow/malformed/conflict/challenge/control outcomes, and account/chat eligibility unverified. Existing blacklist, CDN evidence scope, aggregation, node health, Gemini 2 MiB, Antigravity, historical observations and deployment authority are unchanged. The preserved measurement baseline is not implementation acceptance; the new revision's cloud and independent acceptance remain required.

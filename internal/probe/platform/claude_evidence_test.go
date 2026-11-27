@@ -87,10 +87,9 @@ func (b *claudeCountedBody) Read(p []byte) (int, error) {
 
 func (b *claudeCountedBody) Close() error { b.closes++; return nil }
 
-// Revision B intentionally logs classifications without asserting the old
-// algorithm's answers. The oracle describes synthetic input semantics; a green
-// measurement run does NOT mean the detector satisfies it. Revision C adds the
-// semantic assertions against the same inputs after preserving B's cloud output.
+// Revision B logged these fixed inputs without accepting the old classifications.
+// Revision C retains the measurements and now enforces the same synthetic oracle.
+// Neither revision measures provider/account availability or production accuracy.
 func TestClaudeControlledResponseCorpus(t *testing.T) {
 	for _, tc := range claudeControlledCorpus() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,6 +139,33 @@ func TestClaudeControlledResponseCorpus(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Logf("CLAUDE_CORPUS %s", encoded)
+			if got.Verdict != tc.wantVerdict || got.Reason != tc.wantReason || got.Region != tc.wantRegion {
+				t.Fatalf("got %+v; want %s/%s region=%q", got, tc.wantVerdict, tc.wantReason, tc.wantRegion)
+			}
+			if tc.wantRegion == "" {
+				if got.RegionSource != "" || got.EvidenceScope != "" || got.SubTier == "unlocked" {
+					t.Fatalf("unverified trace asserted positive evidence: %+v", got)
+				}
+			} else {
+				if got.RegionSource != "cdn_trace" || got.EvidenceScope != "cdn_trace" {
+					t.Fatalf("trace evidence scope lost: %+v", got)
+				}
+				if !strings.Contains(got.Summary, "account/chat eligibility unverified") {
+					t.Fatalf("trace summary overstates capability: %+v", got)
+				}
+			}
+			wantBytes := len(tc.body)
+			if tc.finalURL != "" || (tc.status != 0 && tc.status != http.StatusOK) {
+				wantBytes = 0
+			} else if wantBytes > claudeCorpusBoundary {
+				wantBytes = claudeCorpusBoundary + 1
+			}
+			if body.bytes != wantBytes {
+				t.Fatalf("consumed %d body bytes; want %d", body.bytes, wantBytes)
+			}
+			if wantBytes > 0 && wantBytes <= claudeCorpusBoundary && tc.readErr == nil && !body.eof {
+				t.Fatal("in-bound evidence was not read to EOF")
+			}
 		})
 	}
 }
@@ -188,4 +214,13 @@ func TestClaudeSharedBudgetControlledCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("CLAUDE_BUDGET %s", encoded)
+	if first.Verdict != domain.VerdictError || first.Reason != "response_body_too_large" || first.Region != "" {
+		t.Fatalf("oversized trace was not rejected honestly: %+v", first)
+	}
+	if second.Verdict != domain.VerdictAvailable || second.Reason != "gemini_web_reachable" || second.Region != "US" {
+		t.Fatalf("oversized sibling prevented valid Gemini evidence: %+v", second)
+	}
+	if requests != 2 || len(rows) != 2 || claudeBody.bytes != claudeCorpusBoundary+1 || geminiBody.bytes != len(gemini) || ctx.Err() != nil {
+		t.Fatalf("unexpected shared-budget cost: %s", encoded)
+	}
 }

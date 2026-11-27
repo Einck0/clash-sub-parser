@@ -19,6 +19,7 @@ import {
 import ProbeEvidenceSheet from './ProbeEvidenceSheet.vue'
 import NodesView from '../nodes/NodesView.vue'
 import { api } from '../../api/client'
+import { getLocale, setLocale } from '../../locales'
 
 export const subcheckFixtureNodes: Record<string, NodeRecord> = {
   aiFull: {
@@ -689,6 +690,86 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       }
     })
 
+    it('qualifies non-current platform evidence in list expansion and both drawer locations', async () => {
+      const claude: PlatformCapability = {
+        verdict: 'available', sub_tier: 'unlocked', region: 'US', exit_region: 'US',
+        reason: 'claude_available', region_source: 'cdn_trace', evidence_scope: 'cdn_trace',
+        summary: 'CDN trace region (US); account/chat eligibility unverified',
+      }
+      const node: NodeRecord = {
+        ...subcheckFixtureNodes.aiFull,
+        health_status: 'unknown',
+        capabilities: {
+          ai: { verdict: 'available', stale: true, platforms: { claude } },
+          streaming: { verdict: 'available', stale: false, platforms: { netflix: { verdict: 'available', region: 'US' } } },
+        },
+      }
+      const original = JSON.stringify(node)
+      const locale = getLocale()
+      setLocale('zh-CN')
+      vi.spyOn(api, 'get').mockImplementation(async (path: string) => {
+        if (path === '/api/v1/nodes/node-ai-full') return node
+        if (path === '/api/v1/nodes/node-ai-full/source-history') return { attribution_status: 'unknown', current_sources: [], history: [] }
+        if (path === '/api/v1/nodes') return { items: [node], total: 1, page: 1, page_size: 50 }
+        if (path === '/api/v1/probes/pool') return { probing_node_ids: [], queued_node_ids: [] }
+        return {}
+      })
+      const mountEl = document.createElement('div')
+      document.body.appendChild(mountEl)
+      const app = createApp({ render: () => h(NodesView) })
+      try {
+        app.mount(mountEl)
+        await vi.waitFor(() => expect(mountEl.querySelector('[data-testid="node-card"]')).not.toBeNull())
+        const card = mountEl.querySelector<HTMLElement>('[data-testid="node-card"]')!
+        card.querySelector<HTMLButtonElement>('[data-testid="node-platform-details-toggle"]')!.click()
+        await nextTick()
+        const expanded = card.querySelector<HTMLElement>('[data-testid="node-platform-details-expanded"]')!
+        const platformBadges = (root: Element, name: string) => Array.from(root.querySelectorAll<HTMLElement>('.badge[title]'))
+          .filter((el) => el.textContent?.toUpperCase().includes(name))
+        const assertQualified = (element: HTMLElement, suffix: string, title: string) => {
+          expect(element.textContent).toContain(suffix)
+          expect(element.textContent).toContain('(US)')
+          expect(element.classList.contains('badge-info')).toBe(true)
+          expect(element.classList.contains('badge-success')).toBe(false)
+          expect(element.title).toBe(title)
+          expect(element.title).toContain('cdn_trace')
+          expect(element.title).toContain(claude.summary!)
+        }
+        const expectedZH = getNodePlatformBadges(node, 'ai')[0].tooltip!
+        expect(expectedZH).toMatch(/^仅保留原始观测，不作为当前节点能力依据；请重新检测。 · 原始结论: 可用 \(available\)/)
+        const listBadges = platformBadges(expanded, 'CLAUDE')
+        expect(listBadges).toHaveLength(1)
+        assertQualified(listBadges[0], ' · 非当前记录', expectedZH)
+        const currentSibling = platformBadges(expanded, 'NETFLIX')
+        expect(currentSibling).toHaveLength(1)
+        expect(currentSibling[0].classList.contains('badge-success')).toBe(true)
+        expect(currentSibling[0].textContent).not.toContain('非当前记录')
+
+        card.querySelector<HTMLButtonElement>('[data-testid="node-inspect-btn"]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelector('[data-testid="node-detail-drawer"]')).not.toBeNull())
+        const drawer = document.body.querySelector('[data-testid="node-detail-drawer"]')!
+        await vi.waitFor(() => expect(platformBadges(drawer, 'CLAUDE')).toHaveLength(2))
+        // Both the top capability row and the platform matrix share the projection.
+        for (const badge of platformBadges(drawer, 'CLAUDE')) assertQualified(badge, ' · 非当前记录', expectedZH)
+
+        setLocale('en-US')
+        await nextTick()
+        const expectedEN = getNodePlatformBadges(node, 'ai')[0].tooltip!
+        expect(expectedEN).toMatch(/^Original observation only; not evidence of current node capability\. Probe again\. · Recorded verdict: Available \(available\)/)
+        const englishBadges = [...platformBadges(expanded, 'CLAUDE'), ...platformBadges(drawer, 'CLAUDE')]
+        expect(englishBadges).toHaveLength(3)
+        for (const badge of englishBadges) assertQualified(badge, ' · Recorded (not current)', expectedEN)
+        expect(JSON.stringify(node)).toBe(original)
+        // History evidence formatting is deliberately not changed by node staleness.
+        expect(formatPlatformBadge('claude', claude).tone).toBe('success')
+        expect(formatPlatformBadge('claude', claude).label).not.toContain('Recorded (not current)')
+      } finally {
+        app.unmount()
+        mountEl.remove()
+        setLocale(locale)
+      }
+    })
+
     it('renders platform badges in NodesView ledger', async () => {
       const mockNodes = [
         subcheckFixtureNodes.streamingFull,
@@ -800,7 +881,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
             open: true,
             observations: [obsWithPlatforms, obsWithSpeed],
             loading: false,
-            node: normalizeNode(subcheckFixtureNodes.aiFull),
+            node: normalizeNode({ ...subcheckFixtureNodes.aiFull, capabilities: { ai: { verdict: 'available', stale: true, platforms: obsWithPlatforms.platforms } } }),
           }),
       })
       app.mount(mountEl)
@@ -809,6 +890,7 @@ describe('Subcheck Platform Capability Matrix & Fixture Tests', () => {
       const text = document.body.querySelector('[data-testid="probe-evidence-sheet"]')?.textContent || ''
       expect(text).toContain('旧版探测结果，需重新检测')
       expect(text).toContain('Claude (US)')
+      expect(text).not.toContain('非当前记录')
       expect(text).toContain('8.0 MB/s')
 
       app.unmount()

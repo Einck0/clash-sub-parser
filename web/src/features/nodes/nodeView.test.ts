@@ -16,13 +16,16 @@ import {
   renderSafeNodePreview,
   validateNodeConnectionProfile,
   getNodeGeoRegion,
+  getNodePlatformBadges,
   type NodeRecord,
 } from './nodeView'
 import { subscriptionPatchPayload } from '../subscriptions/useSubscriptions'
 import { api } from '../../api/client'
+import { uiText } from '../../locales/redesign'
+import { formatPlatformBadge, probeVerdictLabel, type PlatformCapability } from '../probes/probeTypes'
 
 vi.mock('../../locales/redesign', () => ({
-  uiText: (zh: string, _en: string) => zh,
+  uiText: vi.fn((zh: string, _en: string) => zh),
 }))
 
 vi.mock('../../ui/PageToolbar.vue', () => ({
@@ -41,6 +44,122 @@ vi.mock('../../ui/PageToolbar.vue', () => ({
     `,
   },
 }))
+
+describe('current-node platform evidence projection', () => {
+  const base: NodeRecord = { logical_id: 'recorded', display_name: 'Recorded node', protocol: 'ss', active: true }
+  const claude: PlatformCapability = {
+    verdict: 'available', sub_tier: 'unlocked', region: 'US', exit_region: 'JP',
+    reason: 'claude_available', region_source: 'cdn_trace', evidence_scope: 'cdn_trace',
+    summary: 'CDN trace region (US); account/chat eligibility unverified',
+  }
+  const qualification = '仅保留原始观测，不作为当前节点能力依据；请重新检测。'
+
+  it.each(['ai', 'streaming'] as const)('qualifies all %s conclusions without mutating raw or normalized evidence', (kind) => {
+    const platforms: Record<string, PlatformCapability> = kind === 'ai'
+      ? {
+          future_platform: { verdict: 'skipped', reason: 'cancelled' },
+          gemini: { verdict: 'error', reason: 'gemini_marker_missing' },
+          claude,
+          openai: { verdict: 'restricted', reason: 'access_restricted', evidence_scope: 'anonymous_preflight' },
+          antigravity: { verdict: 'available', sub_tier: 'reachable', reason: 'antigravity_entry_reachable', evidence_scope: 'network_entry' },
+        }
+      : {
+          future_platform: { verdict: 'skipped', reason: 'cancelled' },
+          disney: { verdict: 'error', reason: 'transport_error' },
+          youtube: { verdict: 'restricted', sub_tier: 'banned', region: 'CN' },
+          netflix: { verdict: 'available', sub_tier: 'full', region: 'US' },
+        }
+    const node: NodeRecord = { ...base, capabilities: { [kind]: { verdict: 'available', stale: true, platforms } } }
+    const order = kind === 'ai'
+      ? ['openai', 'claude', 'gemini', 'antigravity', 'future_platform']
+      : ['netflix', 'youtube', 'disney', 'future_platform']
+    for (const input of [node, normalizeNode(node)]) {
+      const before = JSON.stringify(input)
+      const badges = getNodePlatformBadges(input, kind)
+      expect(badges.map((badge) => badge.platform)).toEqual(order)
+      for (const badge of badges) {
+        const original = formatPlatformBadge(badge.platform, platforms[badge.platform])
+        expect(badge).toEqual({
+          ...original,
+          label: `${original.label} · 非当前记录`,
+          tone: 'info',
+          tooltip: [qualification, `原始结论: ${probeVerdictLabel(original.verdict)} (${original.verdict})`, original.tooltip].filter(Boolean).join(' · '),
+        })
+      }
+      expect(JSON.stringify(input)).toBe(before)
+    }
+    for (const stale of [false, undefined]) {
+      const currentNode: NodeRecord = { ...base, capabilities: { [kind]: { verdict: 'available', stale, platforms } } }
+      const originals = order.map((key) => formatPlatformBadge(key, platforms[key]))
+      expect(getNodePlatformBadges(currentNode, kind)).toEqual(originals)
+      expect(getNodePlatformBadges(normalizeNode(currentNode), kind)).toEqual(originals)
+    }
+    const projected = getNodePlatformBadges(node, kind)
+    if (kind === 'ai') {
+      const tooltip = projected.find((badge) => badge.platform === 'claude')!.tooltip!
+      for (const text of ['US', 'JP', 'cdn_trace', claude.summary!]) expect(tooltip).toContain(text)
+      expect(projected.find((badge) => badge.platform === 'antigravity')!.tooltip).toContain('模型资格未核验')
+      // The history formatter retains its original available tuple and text.
+      expect(formatPlatformBadge('claude', claude).tone).toBe('success')
+      expect(formatPlatformBadge('claude', claude).label).toBe('Claude (US)')
+    }
+  })
+
+  it('uses the same neutral qualification for every API stale cause and the parent stale verdict', () => {
+    for (const detail of [
+      { verdict: 'available' as const, stale: true, observed_at: '2026-11-27T01:00:00Z' },
+      { verdict: 'available' as const, stale: true, observed_at: '2099-01-01T00:00:00Z' },
+      { verdict: 'available' as const, stale: true, observed_at: '' },
+      { verdict: 'stale' as const },
+    ]) {
+      const node: NodeRecord = { ...base, capabilities: { ai: { ...detail, platforms: { claude } } } }
+      for (const input of [node, normalizeNode(node)]) {
+        const [badge] = getNodePlatformBadges(input, 'ai')
+        expect(badge.label).toBe('Claude (US) · 非当前记录')
+        expect(badge.tone).toBe('info')
+        expect(badge.tooltip).toMatch(/^仅保留原始观测，不作为当前节点能力依据；请重新检测。/)
+        expect(badge.tooltip).not.toMatch(/连接已修改|旧版本|小时|曾经可用/)
+      }
+    }
+  })
+
+  it('leaves current results and the non-stale sibling unchanged and restores current projection on refresh', () => {
+    const current = formatPlatformBadge('claude', claude)
+    for (const stale of [false, undefined]) {
+      const node: NodeRecord = {
+        ...base,
+        capabilities: {
+          ai: { verdict: 'available', stale, platforms: { claude } },
+          streaming: { verdict: 'available', stale: true, platforms: { netflix: { verdict: 'available' } } },
+        },
+      }
+      expect(getNodePlatformBadges(node, 'ai')).toEqual([current])
+      expect(getNodePlatformBadges(normalizeNode(node), 'ai')).toEqual([current])
+      expect(getNodePlatformBadges(node, 'streaming')[0].label).toContain('非当前记录')
+    }
+    const old: NodeRecord = { ...base, capabilities: { ai: { verdict: 'available', stale: true, platforms: { claude } } } }
+    expect(getNodePlatformBadges(old, 'ai')[0].tone).toBe('info')
+    const refreshed: NodeRecord = { ...base, capabilities: { ai: { verdict: 'available', stale: false, platforms: { claude } } } }
+    expect(getNodePlatformBadges(refreshed, 'ai')).toEqual([current])
+    expect(getNodePlatformBadges(old, 'ai')[0].tone).toBe('info')
+  })
+
+  it('localizes the qualification and recorded verdict even without an original tooltip', () => {
+    vi.mocked(uiText).mockImplementation((_zh, en) => en)
+    try {
+      const cap: PlatformCapability = { verdict: 'available' }
+      const node: NodeRecord = { ...base, capabilities: { ai: { verdict: 'available', stale: true, platforms: { future_platform: cap } } } }
+      const original = formatPlatformBadge('future_platform', cap)
+      expect(original.tooltip).toBeUndefined()
+      const [badge] = getNodePlatformBadges(node, 'ai')
+      expect(badge.label).toBe(`${original.label} · Recorded (not current)`)
+      expect(badge.tone).toBe('info')
+      expect(badge.tooltip).toBe('Original observation only; not evidence of current node capability. Probe again. · Recorded verdict: Available (available)')
+    } finally {
+      vi.mocked(uiText).mockImplementation((zh) => zh)
+    }
+  })
+})
 
 describe('node view helpers & plaintext WireGuard / TUIC connection handling', () => {
   it('supports all 7 modern protocols and maps target compatibility accurately', () => {

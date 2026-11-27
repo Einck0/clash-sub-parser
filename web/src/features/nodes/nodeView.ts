@@ -9,6 +9,7 @@ import {
   formatPlatformBadge,
   formatSpeed,
   normalizePlatforms,
+  probeVerdictLabel,
 } from '../probes/probeTypes'
 
 export type CapabilityStatus = 'available' | 'abnormal' | 'restricted' | 'unknown' | 'error' | 'skipped' | 'stale' | 'missing'
@@ -980,7 +981,24 @@ export function getNodePlatformBadges(
     ...allKeys.filter((k) => !canonicalOrder.includes(k)),
   ]
 
-  return sortedKeys.map((key) => formatPlatformBadge(key, detail.platforms![key]))
+  return sortedKeys.map((key): PlatformBadge => {
+    const badge = formatPlatformBadge(key, detail.platforms![key])
+    if (!detail.stale) return badge
+
+    // Current-node views qualify non-current evidence without rewriting its
+    // recorded verdict or the formatter shared with observation history.
+    const qualification = uiText(
+      '仅保留原始观测，不作为当前节点能力依据；请重新检测。',
+      'Original observation only; not evidence of current node capability. Probe again.'
+    )
+    const recorded = `${uiText('原始结论', 'Recorded verdict')}: ${probeVerdictLabel(badge.verdict)} (${badge.verdict})`
+    return {
+      ...badge,
+      label: `${badge.label}${uiText(' · 非当前记录', ' · Recorded (not current)')}`,
+      tone: 'info',
+      tooltip: [qualification, recorded, badge.tooltip].filter(Boolean).join(' · '),
+    }
+  })
 }
 
 export function getNodeSpeedBadge(
